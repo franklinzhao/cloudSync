@@ -330,6 +330,7 @@ fn create_router(state: AppState) -> Router {
         .route("/api/logs", get(handle_get_logs))
         .route("/api/logs/clear", post(handle_clear_logs))
         .route("/api/open-log-file", post(handle_open_log_file))
+        .route("/api/autostart", get(handle_get_autostart).post(handle_set_autostart))
         .with_state(state)
 }
 
@@ -437,6 +438,52 @@ async fn handle_open_config_dir() -> Json<serde_json::Value> {
         open::that(parent).ok();
     }
     Json(serde_json::json!({ "status": "ok" }))
+}
+
+async fn handle_get_autostart() -> Json<serde_json::Value> {
+    let enabled = check_autostart_native();
+    Json(serde_json::json!({ "autostart": enabled }))
+}
+
+async fn handle_set_autostart(Json(payload): Json<serde_json::Value>) -> Json<serde_json::Value> {
+    let enable = payload.get("enable").and_then(|v| v.as_bool()).unwrap_or(false);
+    let ok = set_autostart_native(enable);
+    Json(serde_json::json!({ "status": if ok { "ok" } else { "error" }, "autostart": check_autostart_native() }))
+}
+
+fn check_autostart_native() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        let script = r#"tell application "System Events" to get the name of every login item"#;
+        if let Ok(out) = std::process::Command::new("osascript").arg("-e").arg(script).output() {
+            let names = String::from_utf8_lossy(&out.stdout);
+            return names.split(',').any(|n| n.trim().eq_ignore_ascii_case("CloudSync"));
+        }
+    }
+    false
+}
+
+fn set_autostart_native(enable: bool) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        let script = if enable {
+            r#"tell application "System Events"
+                if not (exists (login item "CloudSync")) then
+                    make login item at end with properties {path:"/Applications/CloudSync.app", hidden:false, name:"CloudSync"}
+                end if
+            end tell"#
+        } else {
+            r#"tell application "System Events"
+                if exists (login item "CloudSync") then
+                    delete login item "CloudSync"
+                end if
+            end tell"#
+        };
+        if let Ok(status) = std::process::Command::new("osascript").arg("-e").arg(script).status() {
+            return status.success();
+        }
+    }
+    false
 }
 
 /// Pop up native macOS folder picker using osascript
@@ -647,6 +694,13 @@ const CONFIG_HTML: &str = r#"<!DOCTYPE html>
     color: #93c5fd;
   }
 
+  .switch { position: relative; display: inline-block; width: 42px; height: 24px; flex-shrink: 0; }
+  .switch input { opacity: 0; width: 0; height: 0; }
+  .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: rgba(255, 255, 255, 0.15); transition: .2s; border-radius: 24px; border: 1px solid var(--border-color); }
+  .slider:before { position: absolute; content: ""; height: 16px; width: 16px; left: 3px; bottom: 3px; background-color: white; transition: .2s; border-radius: 50%; }
+  input:checked + .slider { background-color: #2563eb; border-color: #3b82f6; }
+  input:checked + .slider:before { transform: translateX(18px); }
+
   .chips {
     display: flex;
     flex-wrap: wrap;
@@ -827,6 +881,17 @@ const CONFIG_HTML: &str = r#"<!DOCTYPE html>
         <div style="font-size: 11px; color: var(--text-muted); margin-top: 4px;">Controls terminal and logfile output volume.</div>
       </div>
     </div>
+
+    <div style="margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--card-border); display: flex; align-items: center; justify-content: space-between;">
+      <div>
+        <div style="font-weight: 600; font-size: 13px; color: var(--text-main);">🚀 Open at Login</div>
+        <div style="font-size: 12px; color: var(--text-muted); margin-top: 2px;">Automatically start CloudSync in your menu bar when signing in to macOS.</div>
+      </div>
+      <label class="switch">
+        <input type="checkbox" id="autostart_toggle" onchange="toggleAutostart(this.checked)">
+        <span class="slider"></span>
+      </label>
+    </div>
   </div>
 
   <!-- Section 4: File Exclusions -->
@@ -931,8 +996,35 @@ async function loadConfig() {
       document.getElementById('client_id').value = currentConfig.onedrive.client_id || '';
       document.getElementById('redirect_uri').value = currentConfig.onedrive.redirect_uri || 'http://localhost:8765/callback';
     }
+
+    loadAutostart();
   } catch (err) {
     showToast('Failed to load configuration: ' + err, true);
+  }
+}
+
+async function loadAutostart() {
+  try {
+    const res = await fetch('/api/autostart');
+    const data = await res.json();
+    document.getElementById('autostart_toggle').checked = !!data.autostart;
+  } catch (e) {
+    console.error('Failed to load autostart status:', e);
+  }
+}
+
+async function toggleAutostart(enable) {
+  try {
+    const res = await fetch('/api/autostart', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enable })
+    });
+    const data = await res.json();
+    document.getElementById('autostart_toggle').checked = !!data.autostart;
+    showToast(data.autostart ? 'Auto-start at login enabled' : 'Auto-start at login disabled', false);
+  } catch (e) {
+    showToast('Failed to update autostart setting: ' + e, true);
   }
 }
 

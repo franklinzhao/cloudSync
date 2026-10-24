@@ -204,15 +204,32 @@ Both web interfaces run on local HTTPS (`https://localhost:8766`). Self-signed T
 
 ---
 
-## 🔄 Launch at Login (macOS LaunchAgent)
+## 🔄 Launch at Login (Automatic Startup)
 
-To make CloudSync start automatically when you log into macOS:
+You can have CloudSync start automatically whenever you log into macOS:
 
+### Method 1: Web Settings UI (Recommended)
+1. Click the CloudSync icon in your menu bar.
+2. Select **Config** ➔ **Open Settings…** (or open `https://localhost:8766/config`).
+3. Under **Sync Schedule & Logging**, toggle on **"🚀 Open at Login"**.
+
+### Method 2: macOS System Settings
+CloudSync registers directly with macOS's native Login Items:
+* Open **System Settings** ➔ **General** ➔ **Login Items & Extensions**.
+* You will see **CloudSync** listed under **"Open at Login"** where you can enable or disable it anytime.
+
+### Method 3: Command Line Script
 ```bash
-# 1. Copy CloudSync.app to your Applications folder
-cp -R release/CloudSync.app /Applications/
+# Enable auto-start at login
+bash scripts/enable_autostart.sh
 
-# 2. Create the LaunchAgent plist
+# Disable auto-start at login
+bash scripts/disable_autostart.sh
+```
+
+### Method 4: macOS LaunchAgent (Advanced / Daemon Mode)
+If you prefer managing the process via `launchd`:
+```bash
 cat > ~/Library/LaunchAgents/com.franklinzhao.cloudsync.plist << 'EOF'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -233,8 +250,6 @@ cat > ~/Library/LaunchAgents/com.franklinzhao.cloudsync.plist << 'EOF'
 </dict>
 </plist>
 EOF
-
-# 3. Load the LaunchAgent
 launchctl load ~/Library/LaunchAgents/com.franklinzhao.cloudsync.plist
 ```
 
