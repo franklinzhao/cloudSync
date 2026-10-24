@@ -4,7 +4,7 @@
 
 use anyhow::{anyhow, Result};
 use axum::{
-    extract::State,
+    extract::{Query, State},
     http::StatusCode,
     response::{Html, IntoResponse, Json, Response},
     routing::{get, post},
@@ -15,6 +15,7 @@ use hyper_util::server::conn::auto::Builder as ConnBuilder;
 use hyper_util::service::TowerToHyperService;
 use rustls::ServerConfig;
 use rustls_pki_types::{CertificateDer, PrivateKeyDer};
+use serde::Deserialize;
 use std::collections::VecDeque;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU16, AtomicU64, Ordering};
@@ -26,21 +27,28 @@ use tracing::{error, info, warn};
 
 use crate::config::Config;
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct LogEntry {
+    pub id: u64,
+    pub text: String,
+}
+
 static PORT: AtomicU16 = AtomicU16::new(8766);
-static LOG_BUFFER: OnceLock<Arc<Mutex<VecDeque<String>>>> = OnceLock::new();
+static LOG_BUFFER: OnceLock<Arc<Mutex<VecDeque<LogEntry>>>> = OnceLock::new();
 static LOG_REVISION: AtomicU64 = AtomicU64::new(0);
+static TOTAL_LOG_COUNT: AtomicU64 = AtomicU64::new(0);
 
 /// Get or initialize the global in-memory log ring buffer
-pub fn get_log_buffer() -> Arc<Mutex<VecDeque<String>>> {
+pub fn get_log_buffer() -> Arc<Mutex<VecDeque<LogEntry>>> {
     LOG_BUFFER
-        .get_or_init(|| Arc::new(Mutex::new(VecDeque::with_capacity(5000))))
+        .get_or_init(|| Arc::new(Mutex::new(VecDeque::with_capacity(3000))))
         .clone()
 }
 
 /// Writer for tracing that duplicates logs to stdout, cloudsync.log, and the in-memory ring buffer
 #[derive(Clone)]
 pub struct AppLogWriter {
-    buffer: Arc<Mutex<VecDeque<String>>>,
+    buffer: Arc<Mutex<VecDeque<LogEntry>>>,
     file: Option<Arc<Mutex<std::fs::File>>>,
 }
 
@@ -77,10 +85,14 @@ impl std::io::Write for AppLogWriter {
                 for line in s.lines() {
                     let trimmed = line.trim();
                     if !trimmed.is_empty() {
-                        if q.len() >= 5000 {
+                        let id = TOTAL_LOG_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+                        if q.len() >= 3000 {
                             q.pop_front();
                         }
-                        q.push_back(trimmed.to_string());
+                        q.push_back(LogEntry {
+                            id,
+                            text: trimmed.to_string(),
+                        });
                         LOG_REVISION.fetch_add(1, Ordering::Relaxed);
                     }
                 }
@@ -340,17 +352,35 @@ async fn handle_status() -> Html<&'static str> {
     Html(STATUS_HTML)
 }
 
-async fn handle_get_logs() -> Json<serde_json::Value> {
+#[derive(Debug, Deserialize)]
+struct LogQueryParams {
+    since: Option<u64>,
+}
+
+async fn handle_get_logs(
+    Query(params): Query<LogQueryParams>,
+) -> Json<serde_json::Value> {
     let buf = get_log_buffer();
     let rev = LOG_REVISION.load(Ordering::Relaxed);
-    let lines = if let Ok(q) = buf.lock() {
-        q.iter().cloned().collect::<Vec<_>>()
+    let total = TOTAL_LOG_COUNT.load(Ordering::Relaxed);
+
+    let entries: Vec<LogEntry> = if let Ok(q) = buf.lock() {
+        if let Some(since_id) = params.since {
+            // Incremental fetch: only entries newer than since_id
+            q.iter().filter(|e| e.id > since_id).cloned().collect()
+        } else {
+            // Initial fetch: return the latest up to 500 entries
+            let skip = q.len().saturating_sub(500);
+            q.iter().skip(skip).cloned().collect()
+        }
     } else {
         Vec::new()
     };
+
     Json(serde_json::json!({
         "revision": rev,
-        "logs": lines
+        "total": total,
+        "logs": entries
     }))
 }
 
@@ -1531,7 +1561,7 @@ const STATUS_HTML: &str = r#"<!DOCTYPE html>
   }
   .line-num {
     color: var(--text-muted);
-    min-width: 34px;
+    min-width: 48px;
     text-align: right;
     user-select: none;
     font-size: 11px;
@@ -1648,10 +1678,11 @@ const STATUS_HTML: &str = r#"<!DOCTYPE html>
 </div>
 
 <script>
-let allLogs = [];
+let displayedLogs = [];
 let activeLevel = 'all';
-let lastRevision = -1;
+let lastReceivedId = 0;
 let isFetchingLogs = false;
+let totalLinesCount = 0;
 
 function showToast(msg) {
   const t = document.getElementById('toast');
@@ -1665,7 +1696,7 @@ function setLevelFilter(lvl) {
   document.querySelectorAll('.level-tag').forEach(b => {
     b.classList.toggle('active', b.getAttribute('data-lvl') === lvl);
   });
-  renderFilteredLogs();
+  renderAllLogs();
 }
 
 function formatLogLine(raw) {
@@ -1687,41 +1718,77 @@ function formatLogLine(raw) {
   return text;
 }
 
-function renderFilteredLogs() {
+function matchesFilter(entry, query) {
+  const text = entry.text || '';
+  if (activeLevel === 'info' && !text.includes('INFO')) return false;
+  if (activeLevel === 'upload' && !text.includes('Uploading:') && !text.includes('Downloading:')) return false;
+  if (activeLevel === 'warn' && !text.includes('WARN')) return false;
+  if (activeLevel === 'error' && !text.includes('ERROR')) return false;
+  if (query && !text.toLowerCase().includes(query)) return false;
+  return true;
+}
+
+function renderAllLogs() {
   const container = document.getElementById('term-lines');
   const query = document.getElementById('search-filter').value.toLowerCase().trim();
   const autoScroll = document.getElementById('auto-scroll').checked;
 
-  let filtered = allLogs;
-  if (activeLevel === 'info') {
-    filtered = filtered.filter(l => l.includes('INFO'));
-  } else if (activeLevel === 'upload') {
-    filtered = filtered.filter(l => l.includes('Uploading:') || l.includes('Downloading:'));
-  } else if (activeLevel === 'warn') {
-    filtered = filtered.filter(l => l.includes('WARN'));
-  } else if (activeLevel === 'error') {
-    filtered = filtered.filter(l => l.includes('ERROR'));
-  }
+  const filtered = displayedLogs.filter(e => matchesFilter(e, query));
+  const slice = filtered.slice(Math.max(0, filtered.length - 1000));
 
-  if (query) {
-    filtered = filtered.filter(l => l.toLowerCase().includes(query));
-  }
-
-  container.innerHTML = filtered.map((line, idx) => {
-    return `<div class="term-line"><span class="line-num">${idx + 1}</span><span class="line-text">${formatLogLine(line)}</span></div>`;
+  container.innerHTML = slice.map(entry => {
+    return `<div class="term-line"><span class="line-num">${entry.id}</span><span class="line-text">${formatLogLine(entry.text)}</span></div>`;
   }).join('');
 
-  document.getElementById('stat-lines').innerText = allLogs.length + ' lines';
+  updateSyncStateBadge();
 
-  // Smart check if syncing across the latest 25 log lines
+  if (autoScroll) {
+    const body = document.getElementById('term-body');
+    body.scrollTop = body.scrollHeight;
+  }
+}
+
+function appendNewLogs(newEntries) {
+  const container = document.getElementById('term-lines');
+  const autoScroll = document.getElementById('auto-scroll').checked;
+  const query = document.getElementById('search-filter').value.toLowerCase().trim();
+
+  for (const entry of newEntries) {
+    displayedLogs.push(entry);
+
+    if (matchesFilter(entry, query)) {
+      const row = document.createElement('div');
+      row.className = 'term-line';
+      row.innerHTML = `<span class="line-num">${entry.id}</span><span class="line-text">${formatLogLine(entry.text)}</span>`;
+      container.appendChild(row);
+    }
+  }
+
+  // Keep DOM element count bounded to last 1000 items for buttery smooth performance
+  while (container.childNodes.length > 1000) {
+    container.removeChild(container.firstChild);
+  }
+  if (displayedLogs.length > 2500) {
+    displayedLogs = displayedLogs.slice(displayedLogs.length - 2500);
+  }
+
+  updateSyncStateBadge();
+
+  if (autoScroll) {
+    const body = document.getElementById('term-body');
+    body.scrollTop = body.scrollHeight;
+  }
+}
+
+function updateSyncStateBadge() {
   let isSyncing = false;
-  for (let i = allLogs.length - 1; i >= Math.max(0, allLogs.length - 25); i--) {
-    const line = allLogs[i];
-    if (line.includes('Reconciliation done') || line.includes('Manual sync done')) {
+  for (let i = displayedLogs.length - 1; i >= Math.max(0, displayedLogs.length - 25); i--) {
+    const text = displayedLogs[i].text || '';
+    if (text.includes('Reconciliation done') || text.includes('Manual sync done')) {
       isSyncing = false;
       break;
     }
-    if (line.includes('Starting sync') || line.includes('Uploading:') || line.includes('Downloading:') || line.includes('queueing download')) {
+    if (text.includes('Starting sync') || text.includes('Uploading:') || text.includes('Downloading:') || text.includes('queueing download')) {
       isSyncing = true;
       break;
     }
@@ -1736,32 +1803,32 @@ function renderFilteredLogs() {
     badge.className = 'status-badge';
     badgeText.innerText = 'Idle (Watching)';
   }
-
-  if (autoScroll) {
-    const body = document.getElementById('term-body');
-    body.scrollTop = body.scrollHeight;
-  }
 }
 
 async function fetchLogs() {
   if (isFetchingLogs) return;
   isFetchingLogs = true;
   try {
-    const res = await fetch('/api/logs');
+    const url = lastReceivedId > 0 ? `/api/logs?since=${lastReceivedId}` : '/api/logs';
+    const res = await fetch(url);
     if (res.ok) {
       const data = await res.json();
-      const rev = data.revision !== undefined ? data.revision : 0;
-      const newLogs = data.logs || [];
+      if (data.total !== undefined) {
+        totalLinesCount = data.total;
+        document.getElementById('stat-lines').innerText = totalLinesCount.toLocaleString() + ' total lines';
+      }
 
-      // Check whether logs changed: revision changed, length changed, or last line changed
-      const changed = (rev !== lastRevision) || 
-                      (newLogs.length !== allLogs.length) || 
-                      (newLogs.length > 0 && newLogs[newLogs.length - 1] !== allLogs[allLogs.length - 1]);
+      const newEntries = data.logs || [];
+      if (newEntries.length > 0) {
+        // Track the highest received id
+        lastReceivedId = Math.max(lastReceivedId, newEntries[newEntries.length - 1].id);
 
-      if (changed) {
-        lastRevision = rev;
-        allLogs = newLogs;
-        renderFilteredLogs();
+        if (displayedLogs.length === 0) {
+          displayedLogs = newEntries;
+          renderAllLogs();
+        } else {
+          appendNewLogs(newEntries);
+        }
       }
     }
   } catch (err) {
@@ -1802,21 +1869,23 @@ async function openLogFile() {
 
 async function clearLogs() {
   await fetch('/api/logs/clear', { method: 'POST' });
-  lastRevision = -1;
-  allLogs = [];
-  renderFilteredLogs();
+  displayedLogs = [];
+  lastReceivedId = 0;
+  document.getElementById('term-lines').innerHTML = '';
+  document.getElementById('stat-lines').innerText = '0 lines';
   showToast('Cleared terminal output');
 }
 
 function copyLogs() {
-  navigator.clipboard.writeText(allLogs.join('\n'));
-  showToast('📋 Copied ' + allLogs.length + ' lines to clipboard');
+  const text = displayedLogs.map(e => `[${e.id}] ${e.text}`).join('\n');
+  navigator.clipboard.writeText(text);
+  showToast('📋 Copied ' + displayedLogs.length + ' lines to clipboard');
 }
 
 window.onload = () => {
   fetchConfigSummary();
   fetchLogs();
-  setInterval(fetchLogs, 1200);
+  setInterval(fetchLogs, 800);
 };
 </script>
 </body>

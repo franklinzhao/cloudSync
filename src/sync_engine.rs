@@ -69,6 +69,20 @@ impl<'a> SyncEngine<'a> {
         })
     }
 
+    /// Check if a path component contains characters forbidden by OneDrive
+    pub fn find_invalid_char(relative: &str) -> Option<char> {
+        const FORBIDDEN: &[char] = &[':', '*', '?', '"', '<', '>', '|', '\\'];
+        for comp in Path::new(relative).components() {
+            if let std::path::Component::Normal(os_str) = comp {
+                let s = os_str.to_string_lossy();
+                if let Some(c) = s.chars().find(|c| FORBIDDEN.contains(c)) {
+                    return Some(c);
+                }
+            }
+        }
+        None
+    }
+
     /// Run a full two-way sync reconciliation pass
     pub async fn reconcile(&self) -> Result<SyncSummary> {
         info!("Starting sync reconciliation…");
@@ -119,6 +133,14 @@ impl<'a> SyncEngine<'a> {
             return Ok(());
         }
 
+        if let Some(bad_char) = Self::find_invalid_char(&relative) {
+            warn!(
+                "⚠️ Skipping upload for '{}': OneDrive forbids character '{}'. Rename the file on your Mac to sync it.",
+                relative, bad_char
+            );
+            return Ok(());
+        }
+
         let local_hash = hash_file(local_path).await?;
         let record = self.db.get(&relative)?;
 
@@ -155,6 +177,15 @@ impl<'a> SyncEngine<'a> {
 
             if is_online_only(&local_path) {
                 debug!("Skipping online-only placeholder in scan_local: {}", relative);
+                continue;
+            }
+
+            if let Some(bad_char) = Self::find_invalid_char(&relative) {
+                warn!(
+                    "⚠️ Skipping upload for '{}': OneDrive forbids character '{}'. Rename the file on your Mac to sync it.",
+                    relative, bad_char
+                );
+                summary.errors += 1;
                 continue;
             }
 
@@ -669,6 +700,12 @@ mod tests {
         // Valid file should NOT be excluded
         assert!(!engine.is_excluded("photo.jpg"));
         assert!(!engine.is_excluded("sub/folder/report.pdf"));
+
+        // Invalid OneDrive characters check
+        assert_eq!(SyncEngine::find_invalid_char("report:2025.pdf"), Some(':'));
+        assert_eq!(SyncEngine::find_invalid_char("folder/https:www.creditkarma.ca:report.pdf"), Some(':'));
+        assert_eq!(SyncEngine::find_invalid_char("what?file.txt"), Some('?'));
+        assert_eq!(SyncEngine::find_invalid_char("normal_file.pdf"), None);
 
         let _ = std::fs::remove_file(&db_path);
     }
