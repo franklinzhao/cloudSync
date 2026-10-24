@@ -17,7 +17,7 @@ use rustls::ServerConfig;
 use rustls_pki_types::{CertificateDer, PrivateKeyDer};
 use std::collections::VecDeque;
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicU16, Ordering};
+use std::sync::atomic::{AtomicU16, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use tokio::net::TcpListener;
 use tokio::sync::{mpsc, RwLock};
@@ -28,11 +28,12 @@ use crate::config::Config;
 
 static PORT: AtomicU16 = AtomicU16::new(8766);
 static LOG_BUFFER: OnceLock<Arc<Mutex<VecDeque<String>>>> = OnceLock::new();
+static LOG_REVISION: AtomicU64 = AtomicU64::new(0);
 
 /// Get or initialize the global in-memory log ring buffer
 pub fn get_log_buffer() -> Arc<Mutex<VecDeque<String>>> {
     LOG_BUFFER
-        .get_or_init(|| Arc::new(Mutex::new(VecDeque::with_capacity(1000))))
+        .get_or_init(|| Arc::new(Mutex::new(VecDeque::with_capacity(5000))))
         .clone()
 }
 
@@ -76,10 +77,11 @@ impl std::io::Write for AppLogWriter {
                 for line in s.lines() {
                     let trimmed = line.trim();
                     if !trimmed.is_empty() {
-                        if q.len() >= 1000 {
+                        if q.len() >= 5000 {
                             q.pop_front();
                         }
                         q.push_back(trimmed.to_string());
+                        LOG_REVISION.fetch_add(1, Ordering::Relaxed);
                     }
                 }
             }
@@ -340,12 +342,16 @@ async fn handle_status() -> Html<&'static str> {
 
 async fn handle_get_logs() -> Json<serde_json::Value> {
     let buf = get_log_buffer();
+    let rev = LOG_REVISION.load(Ordering::Relaxed);
     let lines = if let Ok(q) = buf.lock() {
         q.iter().cloned().collect::<Vec<_>>()
     } else {
         Vec::new()
     };
-    Json(serde_json::json!({ "logs": lines }))
+    Json(serde_json::json!({
+        "revision": rev,
+        "logs": lines
+    }))
 }
 
 async fn handle_clear_logs() -> Json<serde_json::Value> {
@@ -353,6 +359,7 @@ async fn handle_clear_logs() -> Json<serde_json::Value> {
     if let Ok(mut q) = buf.lock() {
         q.clear();
     }
+    LOG_REVISION.fetch_add(1, Ordering::Relaxed);
     Json(serde_json::json!({ "status": "ok" }))
 }
 
@@ -1643,6 +1650,8 @@ const STATUS_HTML: &str = r#"<!DOCTYPE html>
 <script>
 let allLogs = [];
 let activeLevel = 'all';
+let lastRevision = -1;
+let isFetchingLogs = false;
 
 function showToast(msg) {
   const t = document.getElementById('toast');
@@ -1660,15 +1669,20 @@ function setLevelFilter(lvl) {
 }
 
 function formatLogLine(raw) {
-  let text = raw.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  // Strip ANSI color escape codes (e.g. \u001b[2m)
+  let clean = raw.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '').replace(/\\u001b\[[0-9;]*[a-zA-Z]/g, '');
+  let text = clean.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   
   // Highlighting
   text = text.replace(/^(\d{4}-\d{2}-\d{2}T[\d:\.]+Z)/, '<span class="highlight-time">$1</span>');
   text = text.replace(/\bINFO\b/, '<span class="highlight-info">INFO</span>');
   text = text.replace(/\bWARN\b/, '<span class="highlight-warn">WARN</span>');
   text = text.replace(/\bERROR\b/, '<span class="highlight-error">ERROR</span>');
+  text = text.replace(/\bDEBUG\b/, '<span class="highlight-time">DEBUG</span>');
   text = text.replace(/(Uploading: [^\s]+)/, '<span class="highlight-upload">$1</span>');
+  text = text.replace(/(Downloading: [^\s]+)/, '<span class="highlight-folder">$1</span>');
   text = text.replace(/(Reconciliation done [^$]+)/, '<span class="highlight-done">$1</span>');
+  text = text.replace(/(Manual sync done [^$]+)/, '<span class="highlight-done">$1</span>');
   text = text.replace(/(Sync folder: [^$]+)/, '<span class="highlight-folder">$1</span>');
   return text;
 }
@@ -1682,7 +1696,7 @@ function renderFilteredLogs() {
   if (activeLevel === 'info') {
     filtered = filtered.filter(l => l.includes('INFO'));
   } else if (activeLevel === 'upload') {
-    filtered = filtered.filter(l => l.includes('Uploading:'));
+    filtered = filtered.filter(l => l.includes('Uploading:') || l.includes('Downloading:'));
   } else if (activeLevel === 'warn') {
     filtered = filtered.filter(l => l.includes('WARN'));
   } else if (activeLevel === 'error') {
@@ -1699,11 +1713,23 @@ function renderFilteredLogs() {
 
   document.getElementById('stat-lines').innerText = allLogs.length + ' lines';
 
-  // Check if syncing
-  const lastLine = allLogs[allLogs.length - 1] || '';
+  // Smart check if syncing across the latest 25 log lines
+  let isSyncing = false;
+  for (let i = allLogs.length - 1; i >= Math.max(0, allLogs.length - 25); i--) {
+    const line = allLogs[i];
+    if (line.includes('Reconciliation done') || line.includes('Manual sync done')) {
+      isSyncing = false;
+      break;
+    }
+    if (line.includes('Starting sync') || line.includes('Uploading:') || line.includes('Downloading:') || line.includes('queueing download')) {
+      isSyncing = true;
+      break;
+    }
+  }
+
   const badge = document.getElementById('app-badge');
   const badgeText = document.getElementById('badge-text');
-  if (lastLine.includes('Starting sync') || lastLine.includes('Uploading:')) {
+  if (isSyncing) {
     badge.className = 'status-badge syncing';
     badgeText.innerText = 'Syncing…';
   } else {
@@ -1718,16 +1744,31 @@ function renderFilteredLogs() {
 }
 
 async function fetchLogs() {
+  if (isFetchingLogs) return;
+  isFetchingLogs = true;
   try {
     const res = await fetch('/api/logs');
     if (res.ok) {
       const data = await res.json();
-      if (data.logs && data.logs.length !== allLogs.length) {
-        allLogs = data.logs;
+      const rev = data.revision !== undefined ? data.revision : 0;
+      const newLogs = data.logs || [];
+
+      // Check whether logs changed: revision changed, length changed, or last line changed
+      const changed = (rev !== lastRevision) || 
+                      (newLogs.length !== allLogs.length) || 
+                      (newLogs.length > 0 && newLogs[newLogs.length - 1] !== allLogs[allLogs.length - 1]);
+
+      if (changed) {
+        lastRevision = rev;
+        allLogs = newLogs;
         renderFilteredLogs();
       }
     }
-  } catch (err) {}
+  } catch (err) {
+    console.warn('Fetch logs error:', err);
+  } finally {
+    isFetchingLogs = false;
+  }
 }
 
 async function fetchConfigSummary() {
@@ -1761,6 +1802,7 @@ async function openLogFile() {
 
 async function clearLogs() {
   await fetch('/api/logs/clear', { method: 'POST' });
+  lastRevision = -1;
   allLogs = [];
   renderFilteredLogs();
   showToast('Cleared terminal output');
