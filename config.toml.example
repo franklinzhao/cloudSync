@@ -1,0 +1,67 @@
+# CloudSync Configuration
+# ─────────────────────────────────────────────────────────────────────────────
+# Copy this file to:
+#   ~/Library/Application Support/cloudsync/config.toml
+# and fill in your values.
+
+# ── Shared Local Parent Folder ───────────────────────────────────────────────
+# Shared base directory for all sync folders on this machine:
+local_parent_folder = "/Users/franklinzhao/Library/CloudStorage/OneDrive-Personal"
+
+# ── Sync Folders (Bi-directional sync with automatic dataless hydration) ─────
+# Specify subfolders relative to `local_parent_folder` (no need to repeat the full path).
+# Full local path = local_parent_folder + "/" + subfolder.
+# Any local files that are online-only (dataless) placeholders are automatically downloaded.
+[[sync_folders]]
+subfolder = "SheridanFiles/Pictures"
+remote_folder = "/SheridanFiles/Pictures"
+enabled = true
+
+# You can add additional sync folders simply by adding their subfolder:
+# [[sync_folders]]
+# subfolder = "Documents"
+# remote_folder = "/Documents"
+# enabled = true
+
+# How often (in seconds) to do a full reconcile pass even without file changes
+# Default: 300 (5 minutes)
+sync_interval_secs = 180
+
+# Files/directories to exclude from sync (glob patterns)
+# Examples:
+#   ".DS_Store"
+#   "**/.git/**"
+#   "*.tmp"
+exclude_patterns = [
+    ".DS_Store",
+    "**/.git/**",
+    "**/.gitignore",
+    "*.tmp",
+    "*.swp",
+    "~$*",
+    "Thumbs.db",
+]
+
+# Log verbosity: "trace", "debug", "info", "warn", "error"
+log_level = "info"
+
+# Maximum concurrent file downloads (recommended: 4 to 8)
+max_parallel_downloads = 4
+
+# Maximum concurrent file uploads (recommended: 2 to 3)
+max_parallel_uploads = 2
+
+# ── OneDrive / Azure AD settings ─────────────────────────────────────────────
+# You need to register a free app in the Azure Portal:
+#   https://portal.azure.com/#blade/Microsoft_AAD_RegisteredApps/ApplicationsListBlade
+#
+# Steps:
+#   1. Click "New registration"
+#   2. Name: "CloudSync"
+#   3. Supported account types: "Personal Microsoft accounts only"
+#   4. Redirect URI: "http://localhost:8765/callback" (type: Web)
+#   5. After creation, copy the "Application (client) ID" below
+#   6. Under "API permissions", add "Files.ReadWrite.All" and "offline_access"
+[onedrive]
+client_id = "YOUR_AZURE_CLIENT_ID_HERE"
+redirect_uri = "http://localhost:8765/callback"

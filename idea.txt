@@ -1,0 +1,6 @@
+The idea is is to create a cloud sync service that can sync files between local folder and cloud drives.
+I got an issue:  the imac computer I use is old with MacOS version 13.7.8 of Ventura. The microsoft Onedrive is not 
+compatible with it and it's stop working.   I have to use the web browser version of Onedrive, which is not convenient. 
+I am thinking of creating a desktop app on my iMac using Rust to sync files between local folder
+and cloud drives. Please make a plan for this project, including the architecture, the tech stack, the
+workflow, the features, the requirements, etc. It just need to be simple and easy to use, and reliable.

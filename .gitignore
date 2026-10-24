@@ -1,0 +1,6 @@
+/target
+.DS_Store
+CloudSync.app
+release/
+*.db
+*.log

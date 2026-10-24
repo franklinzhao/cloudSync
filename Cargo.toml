@@ -1,0 +1,96 @@
+[package]
+name = "cloudsync"
+version = "1.0.0"
+edition = "2024"
+description = "A lightweight cloud sync desktop app for macOS, which replaced OneDrive as it's not working in old iMac"
+authors = ["Franklin Zhao"]
+
+[[bin]]
+name = "cloudsync"
+path = "src/main.rs"
+
+[dependencies]
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# HTTP client for cloud API calls
+reqwest = { version = "0.12", features = ["json", "multipart", "stream"] }
+
+# Serialization / deserialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+
+# File system watching
+notify = "6"
+notify-debouncer-mini = "0.4"
+
+# SQLite state database
+rusqlite = { version = "0.31", features = ["bundled"] }
+
+# Auth tokens stored securely in macOS Keychain (default backend on macOS)
+keyring = "2"
+
+# Minimal HTTP server for OAuth2 callback
+tiny_http = "0.12"
+
+# Cryptographic hashing (SHA-256 for file fingerprinting)
+sha2 = "0.10"
+hex = "0.4"
+
+# System tray
+tray-icon = "0.14"
+tao = "0.26"
+image = { version = "0.25", default-features = false, features = ["png"] }
+
+# macOS native dialogs / open browser
+open = "5"
+
+# Config & paths
+dirs = "5"
+
+# Logging / tracing
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+futures = "0.3"
+
+# Error handling
+anyhow = "1"
+thiserror = "1"
+
+# Time
+chrono = { version = "0.4", features = ["serde"] }
+
+# URL building
+url = "2"
+
+# Base64 (for code verifier in PKCE)
+base64 = "0.22"
+
+# Random (for PKCE state / verifier)
+rand = "0.8"
+
+# Async trait support
+async-trait = "0.1"
+
+# Glob pattern matching (for exclude rules)
+glob = "0.3"
+
+# URL-encoding for OneDrive paths
+urlencoding = "2"
+rcgen = "0.14.10"
+axum = "0.8.9"
+hyper-util = { version = "0.1", features = ["full", "server-auto"] }
+tokio-rustls = "0.26"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+rustls-pki-types = "1"
+rustls-pemfile = "2"
+tower = { version = "0.5", features = ["util"] }
+tower-service = "0.3"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
