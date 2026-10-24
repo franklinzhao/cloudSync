@@ -1,177 +1,296 @@
-# CloudSync
+# CloudSync ☁️
 
-A lightweight macOS desktop app (Rust) that syncs a local folder to OneDrive — a drop-in replacement for the official OneDrive client on older Macs (macOS Ventura 13.x).
+A lightweight, high-performance macOS cloud synchronization client written in Rust.
 
-## Why?
-
-Microsoft dropped OneDrive desktop support for macOS Ventura 13.x on older iMacs. This app restores that sync capability with zero dependencies on Microsoft's app.
-
-## Features (MVP)
-
-- 🔄 **Two-way sync** — bidirectional sync between a local folder and OneDrive
-- 👁 **Real-time watching** — syncs within seconds of a file change
-- ⏱ **Periodic reconcile** — full pass every 3–5 minutes (configurable)
-- 🔒 **OAuth2 PKCE** — secure login via system browser, browser opens **once only**
-- 🔑 **macOS Keychain** — refresh token stored in the OS credential store, never in a plain file
-- 🔁 **Silent refresh** — subsequent runs refresh the token silently in the background
-- 🗄 **SQLite state** — local DB tracks hashes/eTags to avoid redundant transfers
-- 📥 **Large file support** — resumable upload sessions for files > 4 MB
-- 🍎 **Menu bar icon** — idle/syncing/error states with "Sync Now", "Open Folder", "Quit"
-
-## Requirements
-
-- macOS 13.x Ventura or later
-- Rust stable toolchain (`rustup` — https://rustup.rs)
-- A Microsoft Entra ID app registration (free — see Setup)
-
-## Setup
-
-### Step 1 — Register the App in Microsoft Entra ID
-
-> **Use [entra.microsoft.com](https://entra.microsoft.com), NOT the old Azure Portal app registration page.**
-> Sign in with your personal Microsoft account (Outlook / Hotmail / Live / Microsoft 365 Family).
-
-1. Go to **https://entra.microsoft.com** → sign in with your Microsoft account
-2. Left menu → **Applications** → **App registrations** → **New registration**
-3. Fill in:
-   | Field | Value |
-   |-------|-------|
-   | Name | `CloudSync` |
-   | Supported account types | **Personal Microsoft accounts only** |
-   | Platform type | **Mobile and desktop applications** |
-   | Redirect URI | `http://localhost:8765/callback` |
-
-4. Click **Register**
-5. Left menu → **API permissions** → **Add a permission** → **Microsoft Graph** → **Delegated**
-6. Add: `Files.ReadWrite` and `offline_access`
-7. Back on the **Overview** page, copy the **Application (client) ID**
-
-> **Why "Mobile and desktop applications"?**
-> This platform type allows any `localhost` port for the redirect URI, which is required for native desktop apps. "Web" requires an exact URI match and is only for server-hosted apps.
+CloudSync was designed as a drop-in replacement for the official Microsoft OneDrive desktop client on older Macs (such as macOS Ventura 13.x on iMacs) where official desktop sync support was discontinued. It runs silently as a native macOS menu bar agent with zero background desktop clutter, an embedded local HTTPS configuration interface, and a live web terminal status console.
 
 ---
 
-### Step 2 — Create the Config File
+## ✨ Features
+
+- 🔄 **Bidirectional Two-Way Sync** — Seamless two-way synchronization between your local file system and OneDrive cloud storage.
+- 📁 **Multi-Folder Pairings & Shared Parent Folder** — Map multiple folders individually or define a single `local_parent_folder` with multiple subfolders (e.g., `Documents`, `Pictures`, `Projects`) to eliminate path redundancy.
+- ⚡️ **Parallel Transfers & Resumable Uploads** — Multi-threaded concurrent downloads (up to 8 streams) and uploads (up to 4 streams), featuring chunked resumable upload sessions for files > 4 MB.
+- 👁 **Real-Time Watching & Periodic Reconcile** — File system events trigger instant synchronization via `notify`, reinforced by periodic background reconciliation passes (configurable interval).
+- 🛡 **Smart Exclusions & Online-Only Protection**:
+  - Automatically excludes OS-level metadata at any folder depth (`.DS_Store`, `Thumbs.db`, `.git`, `.Trash`, AppleDouble `._*` resource forks).
+  - Detects macOS OneDrive "online-only" (placeholder / dataless) files via filesystem attributes (`SF_DATALESS` / extended attributes) to prevent uploading empty stubs or corrupting cloud files.
+- 🍎 **Menu Bar Agent (Hidden from Desktop & Dock)** — Packaged as a native macOS application bundle (`CloudSync.app`) with `LSUIElement` enabled. CloudSync operates purely from your menu bar with no persistent terminal window on the desktop and no Dock icon.
+- 💻 **Live Web Terminal Console (`/status`)** — Click **Status** in the menu bar to open a dark macOS-themed terminal console in your browser (`https://localhost:8766/status`) streaming real-time colored logs, level filters (`INFO`, `WARN`, `ERROR`, `DEBUG`), text search, and sync controls.
+- ⚙️ **Web Settings UI (`/config`)** — Embedded local HTTPS web interface (`https://localhost:8766/config`) to view, add, or edit sync folder pairings, set transfer limits, and adjust intervals without manually editing configuration files.
+- 🔒 **Security & macOS Keychain** — Initial login via OAuth2 PKCE in your default browser. Refresh tokens are stored securely in macOS Keychain (`keyring`) and renewed silently in the background. Local web services run over TLS with auto-generated certificates.
+
+---
+
+## 🏗 Architecture
+
+```
+                       ┌────────────────────────┐
+                       │  macOS Menu Bar Tray   │  <-- Status, Sync Now, Config
+                       └───────────┬────────────┘
+                                   │
+┌──────────────────────────────────┴──────────────────────────────────┐
+│                           CloudSync Daemon                          │
+│                                                                     │
+│  ┌────────────────────────┐              ┌───────────────────────┐  │
+│  │   Local HTTPS Server   │              │   File Watcher Task   │  │
+│  │  (localhost:8766)      │              │  (notify / debounce)  │  │
+│  │  ├─ /status (Terminal) │              └──────────┬────────────┘  │
+│  │  └─ /config (Settings) │                         │               │
+│  └────────────────────────┘                         ▼               │
+│                                            ┌─────────────────────┐  │
+│  ┌────────────────────────┐   Reconcile    │     Sync Engine     │  │
+│  │   SQLite State DB      │ ◄────────────► │ (Parallel UL / DL)  │  │
+│  │  (hashes, eTags, dirs) │                └──────────┬──────────┘  │
+│  └────────────────────────┘                           │             │
+│                                                       ▼             │
+│  ┌────────────────────────┐              ┌───────────────────────┐  │
+│  │  macOS Keychain Store  │ ◄──────────► │    OneDrive Client    │  │
+│  │  (OAuth2 Tokens)       │  Silent Auth │  (Microsoft Graph)    │  │
+│  └────────────────────────┘              └──────────┬────────────┘  │
+└─────────────────────────────────────────────────────┼───────────────┘
+                                                      │
+                                                      ▼
+                                            Microsoft Graph API
+                                             (OneDrive Personal)
+```
+
+---
+
+## 📋 Requirements
+
+- **Operating System:** macOS 11.0 (Big Sur), macOS 12 (Monterey), macOS 13 (Ventura), or newer.
+- **Rust Toolchain:** Stable Rust (edition 2024 or later) installed via [rustup.rs](https://rustup.rs).
+- **Microsoft Account:** A personal Microsoft account (Outlook / Hotmail / Microsoft 365 Family).
+- **Entra ID App Registration:** Free registration to obtain an OAuth Client ID (see Step 1 below).
+
+---
+
+## 🚀 Setup Guide
+
+### Step 1 — Register an App in Microsoft Entra ID
+
+> **Note:** Use [entra.microsoft.com](https://entra.microsoft.com), not the legacy Azure Portal. Sign in with your personal Microsoft account.
+
+1. Navigate to **https://entra.microsoft.com** and sign in.
+2. In the sidebar, go to **Applications** → **App registrations** → **New registration**.
+3. Configure the following fields:
+   | Setting | Value |
+   |---|---|
+   | **Name** | `CloudSync` |
+   | **Supported account types** | **Personal Microsoft accounts only** |
+   | **Platform configuration** | Click *Add a platform* → **Mobile and desktop applications** |
+   | **Redirect URI** | `http://localhost:8765/callback` |
+4. Click **Register**.
+5. In the left menu, select **API permissions** → **Add a permission** → **Microsoft Graph** → **Delegated permissions**.
+6. Check and add:
+   - `Files.ReadWrite`
+   - `offline_access`
+7. Return to the **Overview** page and copy your **Application (client) ID**.
+
+---
+
+### Step 2 — Configuration
+
+Create the CloudSync configuration directory and initial config file:
 
 ```bash
 mkdir -p "$HOME/Library/Application Support/cloudsync"
 cp config.toml.example "$HOME/Library/Application Support/cloudsync/config.toml"
 ```
 
-Edit `~/Library/Application Support/cloudsync/config.toml` and set:
+Edit `~/Library/Application Support/cloudsync/config.toml`:
 
 ```toml
-local_folder = "/path/to/your/local/folder"   # folder to sync
-remote_folder = "/testCloudSync"               # folder name on OneDrive
+# ==============================================================================
+# CloudSync Configuration
+# ==============================================================================
+
+# Common parent folder for local sync directories
+local_parent_folder = "/Users/yourusername/Library/CloudStorage/OneDrive-Personal"
+
+# Configure one or more folder pairs
+[[sync_folders]]
+subfolder = "SheridanFiles/Documents"   # Relative to local_parent_folder
+remote_folder = "/Documents"           # Path in OneDrive
+
+[[sync_folders]]
+subfolder = "SheridanFiles/Pictures"
+remote_folder = "/Pictures"
+
+# Sync timing & concurrency
+sync_interval_secs = 300               # Periodic reconcile every 5 minutes
+max_parallel_downloads = 4             # Concurrent download streams (1-8)
+max_parallel_uploads = 2               # Concurrent upload streams (1-4)
+log_level = "info"                     # trace, debug, info, warn, error
+
+# Custom exclusion patterns
+exclude = [
+    "*.tmp",
+    "*.swp",
+    "*.bak",
+    "node_modules",
+]
 
 [onedrive]
-client_id = "YOUR-CLIENT-ID-HERE"             # from Step 1
+client_id = "YOUR_MICROSOFT_CLIENT_ID_HERE"
+```
+
+> **Tip:** You can also configure all sync folder pairs and preferences visually through the web UI at `https://localhost:8766/config` once the application is running.
+
+---
+
+### Step 3 — Build & Bundle the macOS App
+
+Use the included build script to compile the release binary and assemble the native `CloudSync.app` bundle:
+
+```bash
+./scripts/bundle_app.sh
+```
+
+The compiled application bundle will be created at:
+```
+release/CloudSync.app
 ```
 
 ---
 
-### Step 3 — Build & Run
+### Step 4 — Run CloudSync
 
+#### Running in the Background (Recommended):
+Run the launcher script to start CloudSync silently in the background menu bar:
 ```bash
-cargo build --release
-./target/release/cloudsync
+./run-hidden.sh
 ```
 
-**First run:** your browser opens to the Microsoft login page. Sign in and approve the permissions. The app captures the token and saves the **refresh token to your macOS Keychain**.
+*(You can also double-click `release/CloudSync.app` in Finder or copy it to `/Applications`.)*
 
-**Every subsequent run:** the app silently refreshes the token from the Keychain — no browser, no interaction needed.
+#### Initial Authentication:
+On the first run, CloudSync will automatically open your default browser to Microsoft's secure login page. Grant the requested permissions. CloudSync captures the authorization code, exchanges it for a refresh token, and safely saves it to your **macOS Keychain**. 
+
+On all subsequent launches, CloudSync authenticates silently in the background without opening any browser windows.
 
 ---
 
-## How Authentication Works
+## 🖥 Using CloudSync
 
-```
-App start
-  │
-  ├─ Refresh token in macOS Keychain?
-  │      │
-  │    YES → POST silent refresh (~100 ms network call)
-  │             │
-  │           Success → ✅ Ready (no browser opened)
-  │             │
-  │           Failed (expired / revoked)
-  │             │
-  └─── NO / Failed ──→ Open browser once → user logs in
-                              │
-                        Save refresh token to Keychain
-                              │
-                        ✅ Ready
-```
+### macOS Menu Bar Tray
 
-**Token lifetime notes:**
-- Access tokens expire after ~1 hour — the app refreshes automatically before each sync pass
-- Refresh tokens for personal Microsoft accounts last ~90 days of inactivity
-- Each use renews the refresh token (rotation) — a regularly running sync daemon stays signed in indefinitely
-- If you change your Microsoft password or revoke the app, one new browser login is required
+Click the cloud icon in the macOS menu bar to access the control menu:
 
-**To sign out** (removes the Keychain entry):
-```bash
-# Currently via the Keychain Access app:
-# Open Keychain Access → search "cloudsync" → delete the entry
-```
+| Menu Item | Action |
+|---|---|
+| **Status** | Opens the live streaming terminal status console in your browser (`https://localhost:8766/status`) |
+| **Sync Now** | Manually triggers an immediate two-way reconciliation pass |
+| **Open Sync Folder** | Opens your primary local sync folder in macOS Finder |
+| **Config** ➔ **Open Settings…** | Opens the web configuration UI (`https://localhost:8766/config`) |
+| **Config** ➔ **Log Level** | Dynamically changes logging verbosity (`Trace`, `Debug`, `Info`, `Warn`, `Error`) |
+| **Config** ➔ **Max Downloads / Uploads** | Adjusts concurrent transfer concurrency on the fly |
+| **Config** ➔ **Open config.toml** | Opens the raw configuration file in your default editor |
+| **Quit CloudSync** | Gracefully shuts down the background daemon |
+
+### Web Interface URLs
+
+Both web interfaces run on local HTTPS (`https://localhost:8766`). Self-signed TLS certificates are generated automatically on startup and saved to your Application Support folder.
+
+* **Live Status & Log Console:** [`https://localhost:8766/status`](https://localhost:8766/status)
+  - Dark terminal view with real-time logs.
+  - Quick filter buttons (`ALL`, `INFO`, `WARN`, `ERROR`, `DEBUG`, `TRACE`).
+  - Search box, auto-scroll lock, copy logs, and trigger manual sync.
+* **Preferences & Folder Settings:** [`https://localhost:8766/config`](https://localhost:8766/config)
+  - Visual folder management: add, edit, or remove sync folder pairings.
+  - Native folder browser dialog integration.
+  - Live adjustment of concurrency, interval, and log level.
 
 ---
 
-### Optional: Launch at Login
+## 🔄 Launch at Login (macOS LaunchAgent)
+
+To make CloudSync start automatically when you log into macOS:
 
 ```bash
-# Copy the built binary to /usr/local/bin
-sudo cp target/release/cloudsync /usr/local/bin/
+# 1. Copy CloudSync.app to your Applications folder
+cp -R release/CloudSync.app /Applications/
 
-# Create a LaunchAgent plist
-cat > ~/Library/LaunchAgents/com.cloudsync.plist << 'EOF'
+# 2. Create the LaunchAgent plist
+cat > ~/Library/LaunchAgents/com.franklinzhao.cloudsync.plist << 'EOF'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.cloudsync</string>
+    <string>com.franklinzhao.cloudsync</string>
     <key>ProgramArguments</key>
     <array>
-        <string>/usr/local/bin/cloudsync</string>
+        <string>/Applications/CloudSync.app/Contents/MacOS/cloudsync</string>
     </array>
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
     <true/>
+    <key>ProcessType</key>
+    <string>Interactive</string>
 </dict>
 </plist>
 EOF
-launchctl load ~/Library/LaunchAgents/com.cloudsync.plist
+
+# 3. Load the LaunchAgent
+launchctl load ~/Library/LaunchAgents/com.franklinzhao.cloudsync.plist
+```
+
+To stop or remove the autostart agent:
+```bash
+launchctl unload ~/Library/LaunchAgents/com.franklinzhao.cloudsync.plist
+rm ~/Library/LaunchAgents/com.franklinzhao.cloudsync.plist
 ```
 
 ---
 
-## Project Structure
+## 📁 Repository Structure
 
 ```
-src/
-├── main.rs          # Entry point + main event loop
-├── config.rs        # Config loading/saving (TOML)
-├── auth.rs          # OAuth2 PKCE login + silent Keychain refresh
-├── watcher.rs       # FS event watcher (notify crate)
-├── sync_engine.rs   # Core two-way sync logic
-├── state_db.rs      # SQLite sync state (hashes, eTags)
-├── tray.rs          # macOS menu bar icon + menu
-└── cloud/
-    ├── mod.rs       # CloudProvider trait
-    └── onedrive.rs  # Microsoft Graph API implementation
+cloudSync/
+├── Cargo.toml                  # Rust dependencies and package configuration
+├── config.toml.example         # Template configuration file
+├── run-hidden.sh               # Shell launcher for background menu bar execution
+├── scripts/
+│   ├── bundle_app.sh           # Builds release binary and creates release/CloudSync.app
+│   └── generate_icns.py        # Generates multi-resolution AppIcon.icns from PNG
+├── assets/                     # High-contrast menu bar icons & application assets
+│   ├── icon_idle.png
+│   ├── icon_syncing.png
+│   ├── icon_error.png
+│   └── AppIcon.icns
+├── release/                    # Output directory for CloudSync.app bundle
+│   └── CloudSync.app
+└── src/
+    ├── main.rs                 # Application entry point, event loop, and orchestration
+    ├── config.rs               # Configuration parser, folder normalization, TOML writer
+    ├── config_server.rs        # Local HTTPS server (/status console, /config web UI)
+    ├── auth.rs                 # OAuth2 PKCE login server and macOS Keychain token storage
+    ├── sync_engine.rs          # Two-way reconciliation, parallel queue, online-only filter
+    ├── state_db.rs             # SQLite database tracking file hashes, timestamps, and eTags
+    ├── watcher.rs              # Recursive file system watcher (notify debouncer)
+    ├── tray.rs                 # macOS menu bar tray icon and context menus
+    └── cloud/
+        ├── mod.rs              # CloudProvider trait definition
+        └── onedrive.rs         # Microsoft Graph API implementation (resumable uploads)
 ```
 
-## Troubleshooting
+---
 
-| Problem | Fix |
-|---------|-----|
-| Browser login fails with "tenant" error | Make sure you selected **Personal Microsoft accounts only** when registering the app |
-| "No code returned" after login | Check the redirect URI is exactly `http://localhost:8765/callback` and the platform is **Mobile and desktop applications** |
-| Token expired after long break | The app will automatically open the browser for a one-time re-login |
-| Want to sign out / switch accounts | Open **Keychain Access**, search for `cloudsync`, delete the entry, then restart the app |
+## ❓ Troubleshooting
 
-## License
+| Issue | Cause & Solution |
+|---|---|
+| **Browser login shows "Tenant error"** | Ensure you selected **Personal Microsoft accounts only** when creating your Entra ID app registration. |
+| **"No authorization code returned"** | Verify that the redirect URI is exactly `http://localhost:8765/callback` and registered under the **Mobile and desktop applications** platform. |
+| **Online-only OneDrive files skipped** | CloudSync intentionally skips OneDrive placeholder (dataless) files to prevent uploading zero-byte stubs. Right-click the folder in OneDrive or Finder and choose *"Always Keep on This Device"* if you wish to sync them. |
+| **Browser warns about self-signed HTTPS certificate** | The local status and config servers run on `https://localhost:8766` using a locally generated certificate in `~/Library/Application Support/cloudsync/`. In Safari or Chrome, click *"Advanced"* and proceed to `localhost`. |
+| **Reset authentication / switch accounts** | Open macOS **Keychain Access**, search for `cloudsync`, delete the stored token entry, and restart CloudSync to re-authenticate. |
 
-MIT
+---
+
+## 📄 License
+
+This project is licensed under the [MIT License](LICENSE).

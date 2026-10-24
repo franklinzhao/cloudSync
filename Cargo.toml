@@ -4,6 +4,8 @@ version = "1.0.0"
 edition = "2024"
 description = "A lightweight cloud sync desktop app for macOS, which replaced OneDrive as it's not working in old iMac"
 authors = ["Franklin Zhao"]
+license = "MIT"
+repository = "https://github.com/franklinzhao/cloudSync"
 
 [[bin]]
 name = "cloudsync"
