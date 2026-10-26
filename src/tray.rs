@@ -1,6 +1,6 @@
 use anyhow::Result;
 use tray_icon::{
-    menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu},
+    menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem},
     TrayIcon, TrayIconBuilder,
 };
 
@@ -18,19 +18,7 @@ pub const MENU_SYNC_NOW: &str = "sync_now";
 pub const MENU_QUIT: &str = "quit";
 pub const MENU_OPEN_FOLDER: &str = "open_folder";
 pub const MENU_CONFIG_OPEN: &str = "config_open";
-pub const MENU_CONFIG_OPEN_FILE: &str = "config_open_file";
 pub const MENU_CONFIG_REVEAL: &str = "config_reveal";
-pub const MENU_LOG_TRACE: &str = "log_trace";
-pub const MENU_LOG_DEBUG: &str = "log_debug";
-pub const MENU_LOG_INFO: &str = "log_info";
-pub const MENU_LOG_WARN: &str = "log_warn";
-pub const MENU_LOG_ERROR: &str = "log_error";
-pub const MENU_DL_2: &str = "dl_2";
-pub const MENU_DL_4: &str = "dl_4";
-pub const MENU_DL_8: &str = "dl_8";
-pub const MENU_UL_1: &str = "ul_1";
-pub const MENU_UL_2: &str = "ul_2";
-pub const MENU_UL_4: &str = "ul_4";
 
 /// Commands emitted from the tray menu to the main loop
 #[derive(Debug, Clone)]
@@ -40,11 +28,7 @@ pub enum TrayCommand {
     Quit,
     OpenFolder,
     OpenConfig,
-    OpenConfigFile,
     RevealConfigDir,
-    SetLogLevel(String),
-    SetParallelDownloads(usize),
-    SetParallelUploads(usize),
 }
 
 /// Build the system tray icon and menu. Returns:
@@ -64,49 +48,17 @@ pub fn build_tray(
     let folder_item = MenuItem::with_id(MENU_OPEN_FOLDER, "Open Sync Folder", true, None);
     let quit_item = MenuItem::with_id(MENU_QUIT, "Quit CloudSync", true, None);
 
-    // ── Config submenu ────────────────────────────────────────────────────────
-    let config_menu = Submenu::with_id("config", "Config", true);
-    let open_config_item = MenuItem::with_id(MENU_CONFIG_OPEN, "Open Settings…", true, None);
-    let open_file_item = MenuItem::with_id(MENU_CONFIG_OPEN_FILE, "Open config.toml", true, None);
-    let reveal_item = MenuItem::with_id(MENU_CONFIG_REVEAL, "Reveal in Finder", true, None);
-
-    let log_menu = Submenu::with_id("log_level", "Log Level", true);
-    let log_trace = MenuItem::with_id(MENU_LOG_TRACE, "Trace", true, None);
-    let log_debug = MenuItem::with_id(MENU_LOG_DEBUG, "Debug", true, None);
-    let log_info = MenuItem::with_id(MENU_LOG_INFO, "Info", true, None);
-    let log_warn = MenuItem::with_id(MENU_LOG_WARN, "Warn", true, None);
-    let log_error = MenuItem::with_id(MENU_LOG_ERROR, "Error", true, None);
-    log_menu.append_items(&[&log_trace, &log_debug, &log_info, &log_warn, &log_error])?;
-
-    let dl_menu = Submenu::with_id("max_dl", "Max Downloads", true);
-    let dl_2 = MenuItem::with_id(MENU_DL_2, "2 Downloads", true, None);
-    let dl_4 = MenuItem::with_id(MENU_DL_4, "4 Downloads", true, None);
-    let dl_8 = MenuItem::with_id(MENU_DL_8, "8 Downloads", true, None);
-    dl_menu.append_items(&[&dl_2, &dl_4, &dl_8])?;
-
-    let ul_menu = Submenu::with_id("max_ul", "Max Uploads", true);
-    let ul_1 = MenuItem::with_id(MENU_UL_1, "1 Upload", true, None);
-    let ul_2 = MenuItem::with_id(MENU_UL_2, "2 Uploads", true, None);
-    let ul_4 = MenuItem::with_id(MENU_UL_4, "4 Uploads", true, None);
-    ul_menu.append_items(&[&ul_1, &ul_2, &ul_4])?;
-
-    config_menu.append_items(&[
-        &open_config_item,
-        &PredefinedMenuItem::separator(),
-        &log_menu,
-        &dl_menu,
-        &ul_menu,
-        &PredefinedMenuItem::separator(),
-        &open_file_item,
-        &reveal_item,
-    ])?;
+    let pref_item = MenuItem::with_id(MENU_CONFIG_OPEN, "Preferences…", true, None);
+    let reveal_item = MenuItem::with_id(MENU_CONFIG_REVEAL, "Reveal Config In Finder", true, None);
 
     menu.append_items(&[
         &status_item,
         &PredefinedMenuItem::separator(),
         &sync_item,
         &folder_item,
-        &config_menu,
+        &PredefinedMenuItem::separator(),
+        &pref_item,
+        &reveal_item,
         &PredefinedMenuItem::separator(),
         &quit_item,
     ])?;
@@ -130,19 +82,7 @@ pub fn build_tray(
                     MENU_QUIT            => Some(TrayCommand::Quit),
                     MENU_OPEN_FOLDER     => Some(TrayCommand::OpenFolder),
                     MENU_CONFIG_OPEN     => Some(TrayCommand::OpenConfig),
-                    MENU_CONFIG_OPEN_FILE=> Some(TrayCommand::OpenConfigFile),
                     MENU_CONFIG_REVEAL   => Some(TrayCommand::RevealConfigDir),
-                    MENU_LOG_TRACE       => Some(TrayCommand::SetLogLevel("trace".to_string())),
-                    MENU_LOG_DEBUG       => Some(TrayCommand::SetLogLevel("debug".to_string())),
-                    MENU_LOG_INFO        => Some(TrayCommand::SetLogLevel("info".to_string())),
-                    MENU_LOG_WARN        => Some(TrayCommand::SetLogLevel("warn".to_string())),
-                    MENU_LOG_ERROR       => Some(TrayCommand::SetLogLevel("error".to_string())),
-                    MENU_DL_2            => Some(TrayCommand::SetParallelDownloads(2)),
-                    MENU_DL_4            => Some(TrayCommand::SetParallelDownloads(4)),
-                    MENU_DL_8            => Some(TrayCommand::SetParallelDownloads(8)),
-                    MENU_UL_1            => Some(TrayCommand::SetParallelUploads(1)),
-                    MENU_UL_2            => Some(TrayCommand::SetParallelUploads(2)),
-                    MENU_UL_4            => Some(TrayCommand::SetParallelUploads(4)),
                     _                    => None,
                 };
                 if let Some(c) = cmd {

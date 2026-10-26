@@ -245,10 +245,33 @@ impl<'a> SyncEngine<'a> {
             .map(|r| r.relative_path.clone())
             .collect();
 
+        let mut remote_dirs: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for r in &remote_files {
+            if r.is_dir {
+                remote_dirs.insert(r.relative_path.clone());
+            }
+            let mut p = Path::new(&r.relative_path).parent();
+            while let Some(parent) = p {
+                let s = parent.to_string_lossy();
+                if !s.is_empty() {
+                    remote_dirs.insert(s.to_string());
+                }
+                p = parent.parent();
+            }
+        }
+
         let mut to_download: Vec<(RemoteFile, PathBuf)> = Vec::new();
 
         for remote in &remote_files {
-            if remote.is_dir { continue; }
+            if remote.is_dir {
+                if !self.is_excluded(&remote.relative_path) {
+                    let local_path = self.local_root.join(&remote.relative_path);
+                    if !local_path.exists() {
+                        let _ = fs::create_dir_all(&local_path).await;
+                    }
+                }
+                continue;
+            }
             if self.is_excluded(&remote.relative_path) { continue; }
 
             let local_path = self.local_root.join(&remote.relative_path);
@@ -387,9 +410,12 @@ impl<'a> SyncEngine<'a> {
             }
         }
 
-        // ── Clean up files deleted on the remote ────────────────────────────
+        // ── Clean up files and folders deleted on the remote ────────────────
         // Any file tracked in StateDb that is no longer on the remote was deleted
         // (or renamed) on the cloud.
+        let mut candidate_dirs: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
+        let mut deleted_file_ancestors: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
+
         for record in self.db.all_records()? {
             if self.is_excluded(&record.relative_path) {
                 continue;
@@ -409,6 +435,17 @@ impl<'a> SyncEngine<'a> {
                         info!("Remote deletion detected, removing local: {}", record.relative_path);
                         if let Err(e) = fs::remove_file(&local_path).await {
                             warn!("Failed to remove local file {}: {}", record.relative_path, e);
+                        } else {
+                            // Collect ancestor directories up to local_root for cleanup
+                            let mut curr = local_path.parent();
+                            while let Some(parent) = curr {
+                                if parent == self.local_root || !parent.starts_with(self.local_root) {
+                                    break;
+                                }
+                                candidate_dirs.insert(parent.to_path_buf());
+                                deleted_file_ancestors.insert(parent.to_path_buf());
+                                curr = parent.parent();
+                            }
                         }
                     } else {
                         warn!(
@@ -418,6 +455,62 @@ impl<'a> SyncEngine<'a> {
                     }
                 }
                 self.db.remove(&record.relative_path)?;
+            }
+        }
+
+        // Also check any empty local directories that no longer exist on remote
+        let local_dirs = collect_local_dirs(self.local_root).await;
+        for d in local_dirs {
+            candidate_dirs.insert(d);
+        }
+
+        // Clean up empty directories from deepest to shallowest
+        let mut sorted_candidates: Vec<PathBuf> = candidate_dirs.into_iter().collect();
+        sorted_candidates.sort_by_key(|a| std::cmp::Reverse(a.components().count()));
+
+        for dir in sorted_candidates {
+            if !dir.exists() || !dir.is_dir() {
+                continue;
+            }
+
+            let relative = match dir.strip_prefix(self.local_root) {
+                Ok(p) => p.to_string_lossy().to_string(),
+                Err(_) => continue,
+            };
+
+            if relative.is_empty() || self.is_excluded(&relative) {
+                continue;
+            }
+
+            // If the directory still exists on the remote, preserve it
+            if remote_dirs.contains(&relative) {
+                continue;
+            }
+
+            // Check if directory is empty or only contains disposable OS metadata (e.g. .DS_Store)
+            if is_dir_empty_or_only_metadata(&dir).await.unwrap_or(false) {
+                // If the directory was not an ancestor of a file deleted in this run,
+                // and it was created very recently (< 10s), give the user a moment
+                // (e.g. they just clicked "New Folder" in Finder).
+                if !deleted_file_ancestors.contains(&dir) {
+                    let is_very_recent = if let Ok(meta) = fs::metadata(&dir).await {
+                        meta.modified().ok()
+                            .and_then(|m| m.elapsed().ok())
+                            .map(|elapsed| elapsed < std::time::Duration::from_secs(10))
+                            .unwrap_or(false)
+                    } else {
+                        false
+                    };
+
+                    if is_very_recent {
+                        continue;
+                    }
+                }
+
+                info!("Remote folder deletion detected, removing local empty directory: {}", relative);
+                if let Err(e) = remove_dir_and_disposable_metadata(&dir).await {
+                    warn!("Failed to remove local empty directory {}: {}", relative, e);
+                }
             }
         }
 
@@ -484,15 +577,103 @@ impl<'a> SyncEngine<'a> {
         info!("Local delete detected: {}", relative);
         if let Some(record) = self.db.get(relative)? {
             if let Some(remote_id) = record.remote_id {
-                self.provider.delete(&remote_id).await?;
+                if let Err(e) = self.provider.delete(&remote_id).await {
+                    warn!("Failed to delete remote item {}: {}", relative, e);
+                }
+            }
+            self.db.remove(relative)?;
+        }
+
+        // Also check if relative was a folder containing tracked files
+        let prefix = format!("{}/", relative.trim_end_matches('/'));
+        for record in self.db.all_records()? {
+            if record.relative_path.starts_with(&prefix) {
+                info!("Local folder delete: deleting remote file {}", record.relative_path);
+                if let Some(remote_id) = record.remote_id {
+                    if let Err(e) = self.provider.delete(&remote_id).await {
+                        warn!("Failed to delete remote file {}: {}", record.relative_path, e);
+                    }
+                }
+                self.db.remove(&record.relative_path)?;
             }
         }
-        self.db.remove(relative)?;
+
         Ok(())
     }
 }
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
+
+/// Check whether a file name is disposable OS metadata (safe to delete when cleaning up empty dirs)
+fn is_disposable_metadata(name: &str) -> bool {
+    name == ".DS_Store"
+        || name == "Thumbs.db"
+        || name == "desktop.ini"
+        || name.starts_with("._")
+}
+
+/// Check if a directory is either completely empty or contains only disposable OS metadata
+async fn is_dir_empty_or_only_metadata(dir: &Path) -> Result<bool> {
+    let mut entries = match fs::read_dir(dir).await {
+        Ok(e) => e,
+        Err(_) => return Ok(false),
+    };
+
+    while let Some(entry) = entries.next_entry().await? {
+        let path = entry.path();
+        if path.is_dir() {
+            return Ok(false);
+        }
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy();
+        if !is_disposable_metadata(&name_str) {
+            return Ok(false);
+        }
+    }
+
+    Ok(true)
+}
+
+/// Remove disposable OS metadata files from a directory and then remove the directory itself
+async fn remove_dir_and_disposable_metadata(dir: &Path) -> Result<()> {
+    let mut entries = fs::read_dir(dir).await?;
+    while let Some(entry) = entries.next_entry().await? {
+        let path = entry.path();
+        if path.is_file() {
+            let name = entry.file_name();
+            let name_str = name.to_string_lossy();
+            if is_disposable_metadata(&name_str) {
+                let _ = fs::remove_file(&path).await;
+            }
+        }
+    }
+    fs::remove_dir(dir).await?;
+    Ok(())
+}
+
+/// Recursively collect all directory paths under a root
+async fn collect_local_dirs(root: &Path) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+
+    while let Some(dir) = stack.pop() {
+        if let Ok(mut entries) = fs::read_dir(&dir).await {
+            while let Ok(Some(entry)) = entries.next_entry().await {
+                let path = entry.path();
+                if path.is_dir() {
+                    let name = entry.file_name();
+                    let s = name.to_string_lossy();
+                    if s == ".git" || s == ".Trash" {
+                        continue;
+                    }
+                    dirs.push(path.clone());
+                    stack.push(path);
+                }
+            }
+        }
+    }
+    dirs
+}
 
 /// Recursively collect all file paths (not dirs) under a root
 async fn walk_dir(root: &Path) -> Result<Vec<std::path::PathBuf>> {
@@ -708,6 +889,128 @@ mod tests {
         assert_eq!(SyncEngine::find_invalid_char("normal_file.pdf"), None);
 
         let _ = std::fs::remove_file(&db_path);
+    }
+
+    struct MockProvider {
+        files: Vec<RemoteFile>,
+    }
+    #[async_trait::async_trait]
+    impl CloudProvider for MockProvider {
+        fn name(&self) -> &str { "mock" }
+        async fn list_files(&self) -> Result<Vec<RemoteFile>> {
+            Ok(self.files.clone())
+        }
+        async fn upload(&self, _local_path: &Path, _remote_relative_path: &str) -> Result<RemoteFile> {
+            unimplemented!()
+        }
+        async fn download(&self, _remote_id: &str, _local_path: &Path) -> Result<()> {
+            unimplemented!()
+        }
+        async fn delete(&self, _remote_id: &str) -> Result<()> {
+            Ok(())
+        }
+        async fn create_dir(&self, _remote_relative_path: &str) -> Result<Option<String>> {
+            unimplemented!()
+        }
+    }
+
+    #[tokio::test]
+    async fn test_remote_folder_deletion_cleans_empty_dir() {
+        let temp_dir = std::env::temp_dir().join(format!("cloudsync_test_del_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        let _ = std::fs::create_dir_all(&temp_dir);
+
+        let sub_dir = temp_dir.join("MyFolder").join("Nested");
+        std::fs::create_dir_all(&sub_dir).unwrap();
+        let file_path = sub_dir.join("test.txt");
+        let ds_store_path = sub_dir.join(".DS_Store");
+        std::fs::write(&file_path, b"content").unwrap();
+        std::fs::write(&ds_store_path, b"fake ds_store").unwrap();
+
+        let db_path = temp_dir.join("test.db");
+        let db = StateDb::open(&db_path).unwrap();
+
+        // Record file in DB as previously synced
+        let hash = hash_file(&file_path).await.unwrap();
+        db.upsert(&FileRecord {
+            relative_path: "MyFolder/Nested/test.txt".to_string(),
+            local_hash: Some(hash),
+            remote_etag: Some("etag123".to_string()),
+            remote_id: Some("id123".to_string()),
+            remote_modified_at: Some(chrono::Utc::now()),
+            local_modified_at: None,
+            status: SyncStatus::Synced,
+        }).unwrap();
+
+        // Cloud provider now has NO files (the folder was deleted on cloud)
+        let provider = MockProvider { files: vec![] };
+        let engine = SyncEngine::new(
+            &db,
+            &provider,
+            &temp_dir,
+            &[".DS_Store".to_string()],
+            1,
+            1,
+        );
+
+        let mut summary = SyncSummary::default();
+        engine.scan_remote(&mut summary).await.unwrap();
+
+        // Both file and nested folders should be gone
+        assert!(!file_path.exists(), "File should be deleted");
+        assert!(!sub_dir.exists(), "Nested directory should be deleted");
+        assert!(!temp_dir.join("MyFolder").exists(), "MyFolder directory should be deleted");
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[tokio::test]
+    async fn test_remote_folder_deletion_preserves_dir_with_remaining_files() {
+        let temp_dir = std::env::temp_dir().join(format!("cloudsync_test_keep_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        let _ = std::fs::create_dir_all(&temp_dir);
+
+        let my_dir = temp_dir.join("MyFolder");
+        std::fs::create_dir_all(&my_dir).unwrap();
+        let file1 = my_dir.join("deleted.txt");
+        let file2 = my_dir.join("keep.txt");
+        std::fs::write(&file1, b"deleted content").unwrap();
+        std::fs::write(&file2, b"keep content").unwrap();
+
+        let db_path = temp_dir.join("test.db");
+        let db = StateDb::open(&db_path).unwrap();
+
+        let hash1 = hash_file(&file1).await.unwrap();
+        db.upsert(&FileRecord {
+            relative_path: "MyFolder/deleted.txt".to_string(),
+            local_hash: Some(hash1),
+            remote_etag: Some("etag1".to_string()),
+            remote_id: Some("id1".to_string()),
+            remote_modified_at: Some(chrono::Utc::now()),
+            local_modified_at: None,
+            status: SyncStatus::Synced,
+        }).unwrap();
+
+        // Cloud provider has no files
+        let provider = MockProvider { files: vec![] };
+        let engine = SyncEngine::new(
+            &db,
+            &provider,
+            &temp_dir,
+            &[],
+            1,
+            1,
+        );
+
+        let mut summary = SyncSummary::default();
+        engine.scan_remote(&mut summary).await.unwrap();
+
+        // file1 should be deleted, but file2 and MyFolder should remain
+        assert!(!file1.exists(), "Deleted file should be removed");
+        assert!(file2.exists(), "Remaining file must be preserved");
+        assert!(my_dir.exists(), "MyFolder must be preserved because it still contains file2");
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 }
 

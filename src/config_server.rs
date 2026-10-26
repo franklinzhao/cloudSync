@@ -124,27 +124,6 @@ pub fn get_config_server_port() -> u16 {
     PORT.load(Ordering::Relaxed)
 }
 
-/// Get the URL for the Status & Terminal Console
-pub fn get_status_server_url() -> String {
-    let port = get_config_server_port();
-    format!("https://localhost:{}/status", port)
-}
-
-/// Get the preferred URL for opening the settings page.
-/// Using HTTPS satisfies Safari's HTTPS-Only Mode, while our dual-mode server
-/// also accepts plain HTTP without ERR_EMPTY_RESPONSE.
-pub fn get_config_server_url() -> String {
-    let port = get_config_server_port();
-    format!("https://localhost:{}/config", port)
-}
-
-/// Get the plain HTTP URL as an alternate option
-#[allow(dead_code)]
-pub fn get_config_server_http_url() -> String {
-    let port = get_config_server_port();
-    format!("http://localhost:{}/config", port)
-}
-
 /// Commands sent from the config web server to the main loop
 #[derive(Debug, Clone)]
 pub enum ConfigServerEvent {
@@ -349,7 +328,7 @@ fn create_router(state: AppState) -> Router {
 }
 
 async fn handle_status() -> Html<&'static str> {
-    Html(STATUS_HTML)
+    Html(UNIFIED_HTML)
 }
 
 #[derive(Debug, Deserialize)]
@@ -404,7 +383,7 @@ async fn handle_open_log_file() -> Json<serde_json::Value> {
 }
 
 async fn handle_index() -> Html<&'static str> {
-    Html(CONFIG_HTML)
+    Html(UNIFIED_HTML)
 }
 
 async fn handle_get_config(State(state): State<AppState>) -> Json<serde_json::Value> {
@@ -547,1350 +526,1074 @@ fn pick_folder_native() -> Option<String> {
 }
 
 // ── Embedded HTML / CSS / JS Configuration Interface ────────────────────────
-const CONFIG_HTML: &str = r#"<!DOCTYPE html>
+const UNIFIED_HTML: &str = r##"<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>CloudSync Preferences</title>
+<title>CloudSync</title>
 <style>
   :root {
-    --bg: #0b0f19;
-    --card-bg: #151d30;
+    --bg-main: #0a0e17;
+    --bg-card: #121824;
+    --bg-term: #06090f;
     --card-border: #23304c;
-    --text-main: #f1f5f9;
-    --text-muted: #94a3b8;
+    --border: rgba(255, 255, 255, 0.1);
+    --border-accent: rgba(88, 166, 255, 0.35);
+    --text-primary: #f1f5f9;
+    --text-secondary: #94a3b8;
+    --text-muted: #64748b;
     --accent: #3b82f6;
     --accent-hover: #2563eb;
     --accent-light: rgba(59, 130, 246, 0.15);
     --success: #10b981;
-    --danger: #ef4444;
-    --danger-bg: rgba(239, 68, 68, 0.15);
+    --success-bg: rgba(16, 185, 129, 0.15);
+    --warning: #f59e0b;
+    --error: #ef4444;
+    --error-bg: rgba(239, 68, 68, 0.15);
+    --cyan: #38bdf8;
     --input-bg: #0d1424;
     --input-border: #273754;
-    --radius: 12px;
+    --font-mono: ui-monospace, "SF Mono", Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+    --radius: 10px;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  body {
+  html, body {
+    height: 100%;
+    margin: 0;
+    padding: 0;
+    background: var(--bg-main);
+    color: var(--text-primary);
     font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-    background: var(--bg);
-    color: var(--text-main);
-    line-height: 1.5;
-    padding-bottom: 90px;
     -webkit-font-smoothing: antialiased;
-  }
-  .container { max-width: 860px; margin: 0 auto; padding: 32px 20px; }
-  header {
     display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  /* ── Header ────────────────────────────────────────────── */
+  .app-header {
+    height: 52px;
+    background: rgba(18, 24, 36, 0.96);
+    backdrop-filter: blur(14px);
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
     justify-content: space-between;
-    align-items: center;
-    margin-bottom: 28px;
-    padding-bottom: 20px;
-    border-bottom: 1px solid var(--card-border);
+    padding: 0 18px;
+    flex-shrink: 0;
+    user-select: none;
+    -webkit-user-select: none;
+    z-index: 100;
   }
-  .brand { display: flex; align-items: center; gap: 12px; }
-  .brand-icon {
-    font-size: 28px;
-    background: var(--accent-light);
-    width: 48px;
-    height: 48px;
-    border-radius: 12px;
+  .brand {
     display: flex;
     align-items: center;
-    justify-content: center;
-    border: 1px solid rgba(59, 130, 246, 0.3);
+    gap: 10px;
   }
-  h1 { font-size: 22px; font-weight: 600; letter-spacing: -0.02em; }
-  .subtitle { font-size: 13px; color: var(--text-muted); }
-  .badge {
-    background: rgba(16, 185, 129, 0.15);
+  .brand-icon {
+    font-size: 20px;
+    line-height: 1;
+  }
+  .brand-name {
+    font-size: 15px;
+    font-weight: 700;
+    letter-spacing: -0.3px;
+    color: #fff;
+  }
+  .status-pill {
+    font-size: 11px;
+    font-weight: 600;
+    padding: 3px 9px;
+    border-radius: 12px;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+  }
+  .status-idle {
+    background: var(--success-bg);
     color: var(--success);
     border: 1px solid rgba(16, 185, 129, 0.3);
-    padding: 4px 10px;
-    border-radius: 20px;
-    font-size: 12px;
+  }
+  .status-syncing {
+    background: var(--accent-light);
+    color: var(--accent);
+    border: 1px solid var(--border-accent);
+  }
+
+  /* ── Segmented Control Tab Bar ─────────────────────────── */
+  .segmented-tabs {
+    display: flex;
+    background: #06090f;
+    padding: 3px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    gap: 2px;
+  }
+  .tab-btn {
+    background: transparent;
+    color: var(--text-secondary);
+    border: none;
+    padding: 6px 16px;
+    border-radius: 6px;
+    font-size: 13px;
     font-weight: 500;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    transition: all 0.15s ease;
+  }
+  .tab-btn:hover {
+    color: var(--text-primary);
+    background: rgba(255, 255, 255, 0.05);
+  }
+  .tab-btn.active {
+    background: #1e293b;
+    color: #fff;
+    font-weight: 600;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+  }
+
+  .header-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .btn-sync-quick {
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    padding: 6px 14px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
     display: flex;
     align-items: center;
     gap: 6px;
+    transition: background 0.15s ease;
   }
-  .badge::before { content: ""; width: 7px; height: 7px; background: var(--success); border-radius: 50%; }
+  .btn-sync-quick:hover {
+    background: var(--accent-hover);
+  }
 
+  /* ── Content Area & Panels ─────────────────────────────── */
+  .main-content {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    position: relative;
+    overflow: hidden;
+  }
+  .tab-panel {
+    display: none;
+    flex: 1;
+    min-height: 0;
+    width: 100%;
+    height: 100%;
+  }
+  .tab-panel.active {
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* ── TAB 1: Terminal Status Styles ─────────────────────── */
+  .terminal-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    align-items: center;
+    justify-content: space-between;
+    padding: 9px 18px;
+    background: #0d131f;
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  .filter-group {
+    display: flex;
+    gap: 5px;
+    align-items: center;
+  }
+  .filter-chip {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--border);
+    color: var(--text-secondary);
+    border-radius: 6px;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 4px 9px;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .filter-chip:hover {
+    background: rgba(255, 255, 255, 0.1);
+    color: #fff;
+  }
+  .filter-chip.active {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
+  }
+  .search-box {
+    background: var(--input-bg);
+    border: 1px solid var(--input-border);
+    border-radius: 6px;
+    padding: 5px 10px;
+    color: var(--text-primary);
+    font-size: 12px;
+    width: 190px;
+    outline: none;
+  }
+  .search-box:focus {
+    border-color: var(--accent);
+  }
+  .terminal-actions {
+    display: flex;
+    gap: 7px;
+    align-items: center;
+  }
+  .term-action-btn {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--border);
+    color: var(--text-secondary);
+    border-radius: 6px;
+    font-size: 11px;
+    font-weight: 500;
+    padding: 5px 10px;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .term-action-btn:hover {
+    background: rgba(255, 255, 255, 0.12);
+    color: #fff;
+  }
+  .term-action-btn.active {
+    background: rgba(16, 185, 129, 0.2);
+    border-color: rgba(16, 185, 129, 0.4);
+    color: var(--success);
+  }
+  .terminal-container {
+    flex: 1;
+    min-height: 0;
+    background: var(--bg-term);
+    overflow-y: auto;
+    padding: 12px 18px;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    line-height: 1.6;
+  }
+  .log-row {
+    display: flex;
+    gap: 12px;
+    padding: 2px 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.02);
+  }
+  .log-row:hover {
+    background: rgba(255, 255, 255, 0.03);
+  }
+  .log-id {
+    color: var(--text-muted);
+    width: 42px;
+    text-align: right;
+    flex-shrink: 0;
+    user-select: none;
+  }
+  .log-time {
+    color: var(--text-muted);
+    width: 75px;
+    flex-shrink: 0;
+  }
+  .log-level {
+    width: 50px;
+    font-weight: 700;
+    flex-shrink: 0;
+  }
+  .level-info { color: var(--accent); }
+  .level-warn { color: var(--warning); }
+  .level-error { color: var(--error); }
+  .level-debug { color: #a78bfa; }
+  .level-trace { color: var(--text-muted); }
+  .log-msg {
+    flex: 1;
+    word-break: break-all;
+    white-space: pre-wrap;
+  }
+  .highlight {
+    background: rgba(234, 179, 8, 0.3);
+    color: #fde047;
+    border-radius: 2px;
+    padding: 0 2px;
+  }
+
+  /* ── TAB 2: Preferences Styles ─────────────────────────── */
+  #panel-config {
+    overflow-y: auto;
+    padding: 24px 20px 90px;
+  }
+  .config-container {
+    max-width: 860px;
+    margin: 0 auto;
+    width: 100%;
+  }
   .card {
-    background: var(--card-bg);
+    background: var(--bg-card);
     border: 1px solid var(--card-border);
     border-radius: var(--radius);
-    padding: 22px;
-    margin-bottom: 22px;
-    box-shadow: 0 4px 20px rgba(0,0,0,0.25);
+    padding: 20px 24px;
+    margin-bottom: 20px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
   }
   .card-header {
     display: flex;
     justify-content: space-between;
     align-items: center;
     margin-bottom: 16px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
   }
   .card-title {
     font-size: 16px;
     font-weight: 600;
-    color: var(--text-main);
     display: flex;
     align-items: center;
     gap: 8px;
+    color: #fff;
   }
-  .card-desc { font-size: 13px; color: var(--text-muted); margin-bottom: 16px; }
-
-  .banner-info {
-    background: rgba(59, 130, 246, 0.08);
-    border: 1px solid rgba(59, 130, 246, 0.25);
-    border-radius: 8px;
-    padding: 12px 14px;
-    font-size: 13px;
-    color: #93c5fd;
-    margin-bottom: 16px;
+  .card-desc {
+    font-size: 12px;
+    color: var(--text-secondary);
+    margin-top: 3px;
+  }
+  .form-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    margin-bottom: 14px;
+  }
+  .form-group {
     display: flex;
-    gap: 10px;
-    align-items: flex-start;
+    flex-direction: column;
+    gap: 6px;
+    margin-bottom: 14px;
   }
-
-  .folder-item {
+  .form-label {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .form-input {
     background: var(--input-bg);
     border: 1px solid var(--input-border);
+    border-radius: 6px;
+    color: var(--text-primary);
+    font-size: 13px;
+    padding: 9px 12px;
+    outline: none;
+    font-family: inherit;
+  }
+  .form-input:focus {
+    border-color: var(--accent);
+  }
+  .form-input[readonly] {
+    opacity: 0.7;
+    cursor: default;
+  }
+  .folder-item {
+    background: rgba(0, 0, 0, 0.25);
+    border: 1px solid rgba(255, 255, 255, 0.06);
     border-radius: 8px;
     padding: 16px;
     margin-bottom: 12px;
-    position: relative;
-    transition: border-color 0.15s;
-  }
-  .folder-item:hover { border-color: rgba(59, 130, 246, 0.4); }
-  .folder-row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 12px; }
-  .folder-actions { display: flex; justify-content: space-between; align-items: center; }
-
-  label {
-    display: block;
-    font-size: 12px;
-    font-weight: 500;
-    color: var(--text-muted);
-    margin-bottom: 6px;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-  }
-  .input-group { display: flex; gap: 8px; }
-  input[type="text"], input[type="number"], select {
-    width: 100%;
-    padding: 10px 12px;
-    background: var(--input-bg);
-    border: 1px solid var(--input-border);
-    border-radius: 6px;
-    color: var(--text-main);
-    font-size: 13px;
-    outline: none;
-    transition: all 0.15s;
-  }
-  input[type="text"]:focus, input[type="number"]:focus, select:focus {
-    border-color: var(--accent);
-    box-shadow: 0 0 0 2px var(--accent-light);
-  }
-  input[readonly] { background: rgba(13, 20, 36, 0.6); cursor: default; }
-
-  .btn {
-    padding: 9px 14px;
-    font-size: 13px;
-    font-weight: 500;
-    border-radius: 6px;
-    cursor: pointer;
-    border: none;
-    transition: all 0.15s;
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    user-select: none;
-  }
-  .btn-primary { background: var(--accent); color: #fff; }
-  .btn-primary:hover { background: var(--accent-hover); }
-  .btn-secondary {
-    background: #1e293b;
-    color: #e2e8f0;
-    border: 1px solid var(--card-border);
-  }
-  .btn-secondary:hover { background: #273754; color: #fff; }
-  .btn-danger { background: var(--danger-bg); color: var(--danger); border: 1px solid rgba(239, 68, 68, 0.3); }
-  .btn-danger:hover { background: var(--danger); color: #fff; }
-  .btn-sm { padding: 6px 10px; font-size: 12px; }
-
-  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-  .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px; }
-
-  .range-box { display: flex; align-items: center; gap: 14px; margin-top: 4px; }
-  .range-box input[type="range"] { flex: 1; accent-color: var(--accent); }
-  .range-val {
-    font-size: 14px;
-    font-weight: 600;
-    width: 38px;
-    text-align: right;
-    color: #93c5fd;
-  }
-
-  .switch { position: relative; display: inline-block; width: 42px; height: 24px; flex-shrink: 0; }
-  .switch input { opacity: 0; width: 0; height: 0; }
-  .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: rgba(255, 255, 255, 0.15); transition: .2s; border-radius: 24px; border: 1px solid var(--border-color); }
-  .slider:before { position: absolute; content: ""; height: 16px; width: 16px; left: 3px; bottom: 3px; background-color: white; transition: .2s; border-radius: 50%; }
-  input:checked + .slider { background-color: #2563eb; border-color: #3b82f6; }
-  input:checked + .slider:before { transform: translateX(18px); }
-
-  .chips {
     display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-    margin-bottom: 10px;
-    min-height: 38px;
-    padding: 6px;
-    background: var(--input-bg);
-    border: 1px solid var(--input-border);
-    border-radius: 6px;
+    flex-direction: column;
+    gap: 10px;
   }
-  .chip {
-    background: #1e293b;
-    border: 1px solid #334155;
-    padding: 4px 10px;
-    border-radius: 4px;
-    font-size: 12px;
-    font-family: monospace;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    color: #cbd5e1;
-  }
-  .chip-remove {
-    cursor: pointer;
-    color: var(--text-muted);
-    font-weight: bold;
-  }
-  .chip-remove:hover { color: var(--danger); }
-
-  .sticky-bar {
-    position: fixed;
-    bottom: 0;
-    left: 0;
-    right: 0;
-    background: rgba(15, 23, 42, 0.92);
-    backdrop-filter: blur(14px);
-    border-top: 1px solid var(--card-border);
-    padding: 14px 20px;
-    z-index: 100;
-  }
-  .sticky-content {
-    max-width: 860px;
-    margin: 0 auto;
+  .folder-item-header {
     display: flex;
     justify-content: space-between;
     align-items: center;
   }
-  .quick-links { display: flex; gap: 8px; }
-
-  #toast {
-    position: fixed;
-    top: 24px;
-    right: 24px;
-    background: #1e293b;
-    border: 1px solid var(--accent);
-    color: #fff;
-    padding: 12px 18px;
+  .folder-input-group {
+    display: flex;
+    gap: 8px;
+  }
+  .btn-browse {
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid var(--border);
+    color: var(--text-primary);
+    border-radius: 6px;
+    padding: 0 14px;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: all 0.15s;
+  }
+  .btn-browse:hover {
+    background: rgba(255, 255, 255, 0.16);
+  }
+  .btn-remove-folder {
+    background: transparent;
+    border: none;
+    color: var(--error);
+    font-size: 12px;
+    cursor: pointer;
+    padding: 4px 8px;
+  }
+  .btn-remove-folder:hover {
+    text-decoration: underline;
+  }
+  .btn-add-folder {
+    background: rgba(59, 130, 246, 0.08);
+    border: 1px dashed var(--border-accent);
+    color: var(--accent);
     border-radius: 8px;
-    box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+    padding: 11px;
+    width: 100%;
     font-size: 13px;
-    opacity: 0;
-    transform: translateY(-10px);
-    transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
-    pointer-events: none;
-    z-index: 200;
+    font-weight: 600;
+    cursor: pointer;
     display: flex;
     align-items: center;
-    gap: 10px;
+    justify-content: center;
+    gap: 8px;
+    margin-top: 6px;
+    transition: all 0.15s;
   }
-  #toast.show { opacity: 1; transform: translateY(0); }
+  .btn-add-folder:hover {
+    background: rgba(59, 130, 246, 0.18);
+  }
+  .switch {
+    position: relative;
+    display: inline-block;
+    width: 44px;
+    height: 24px;
+  }
+  .switch input { opacity: 0; width: 0; height: 0; }
+  .slider {
+    position: absolute;
+    cursor: pointer;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background-color: #334155;
+    transition: .2s;
+    border-radius: 24px;
+  }
+  .slider:before {
+    position: absolute;
+    content: "";
+    height: 18px;
+    width: 18px;
+    left: 3px;
+    bottom: 3px;
+    background-color: white;
+    transition: .2s;
+    border-radius: 50%;
+  }
+  input:checked + .slider { background-color: var(--accent); }
+  input:checked + .slider:before { transform: translateX(20px); }
+
+  .sticky-actions-bar {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 60px;
+    background: rgba(18, 24, 36, 0.96);
+    backdrop-filter: blur(14px);
+    border-top: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 12px;
+    padding: 0 24px;
+    z-index: 50;
+  }
+  .btn-save {
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    padding: 9px 22px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+  .btn-save:hover { background: var(--accent-hover); }
+  .btn-reset {
+    background: rgba(255, 255, 255, 0.08);
+    color: var(--text-secondary);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 9px 18px;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .btn-reset:hover {
+    background: rgba(255, 255, 255, 0.15);
+    color: #fff;
+  }
+  .toast {
+    position: fixed;
+    bottom: 72px;
+    right: 24px;
+    background: #1e293b;
+    border: 1px solid var(--border-accent);
+    color: #fff;
+    border-radius: 8px;
+    padding: 10px 18px;
+    font-size: 13px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+    display: none;
+    z-index: 100;
+    animation: fadeIn 0.2s ease;
+  }
+  .toast.show { display: flex; align-items: center; gap: 8px; }
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateY(6px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
 </style>
 </head>
 <body>
 
-<div id="toast"></div>
-
-<div class="container">
-  <header>
-    <div class="brand">
-      <div class="brand-icon">☁️</div>
-      <div>
-        <h1>CloudSync Preferences</h1>
-        <div class="subtitle">Personal OneDrive Concurrency & Bi-Directional Sync Manager</div>
-      </div>
-    </div>
-    <div style="display: flex; gap: 10px; align-items: center;">
-      <a href="/status" class="btn btn-secondary" style="text-decoration: none;">📊 Terminal Status</a>
-      <div class="badge">App Active</div>
-    </div>
-  </header>
-
-  <!-- Section 1: Sync Folders -->
-  <div class="card">
-    <div class="card-header">
-      <div>
-        <div class="card-title">📁 Sync Folders (Bi-Directional + Dataless Hydration)</div>
-        <div class="card-desc">Configure local folders synchronized with OneDrive. Dataless/online-only files are fully downloaded.</div>
-      </div>
-      <button class="btn btn-secondary btn-sm" onclick="addFolderPair()">➕ Add Folder Pair</button>
-    </div>
-
-    <div style="margin-bottom: 18px; padding-bottom: 16px; border-bottom: 1px solid var(--input-border);">
-      <label>Shared Parent Local Folder (reduces path duplication)</label>
-      <div class="input-group">
-        <input type="text" id="parent_folder" placeholder="/Users/franklinzhao/Library/CloudStorage/OneDrive-Personal" oninput="updatePreviews()">
-        <button class="btn btn-secondary btn-sm" onclick="browseParentFolder()">📁 Browse Parent…</button>
-      </div>
-      <div style="font-size: 11px; color: var(--text-muted); margin-top: 4px;">
-        When set, sync folders below only need their relative subfolder (e.g. <code>SheridanFiles/Pictures</code>).
-      </div>
-    </div>
-
-    <div class="banner-info">
-      <span style="font-size: 18px;">💡</span>
-      <div>
-        <strong>Automatic Dataless Hydration Active:</strong><br>
-        If your local OneDrive folder contains dataless placeholders (APFS <code>SF_DATALESS</code>), CloudSync prevents empty uploads and automatically downloads the real files from remote.
-      </div>
-    </div>
-
-    <div id="folders-list"></div>
+<!-- Header -->
+<header class="app-header">
+  <div class="brand">
+    <span class="brand-icon">☁️</span>
+    <span class="brand-name">CloudSync</span>
+    <span id="sync-status-indicator" class="status-pill status-idle">● Idle</span>
   </div>
+  <div class="segmented-tabs" role="tablist">
+    <button type="button" class="tab-btn active" id="tab-btn-status" onclick="switchTab('status')" role="tab">
+      <span class="tab-icon">💻</span>
+      <span>Terminal Status</span>
+    </button>
+    <button type="button" class="tab-btn" id="tab-btn-config" onclick="switchTab('config')" role="tab">
+      <span class="tab-icon">⚙️</span>
+      <span>Preferences</span>
+    </button>
+  </div>
+  <div class="header-actions">
+    <button type="button" class="btn-sync-quick" onclick="triggerManualSync()" id="quick-sync-btn">
+      ↻ Sync Now
+    </button>
+  </div>
+</header>
 
-  <!-- Section 2: Concurrency & Performance -->
-  <div class="card">
-    <div class="card-title" style="margin-bottom: 8px;">⚡ Concurrency & Transfer Limits</div>
-    <div class="card-desc">Fine-tune Graph API throughput while honoring personal OneDrive throttling limits.</div>
+<!-- Main Container with 2 Tab Panels -->
+<main class="main-content">
 
-    <div class="grid-2">
-      <div>
-        <label>Max Parallel Downloads (Recommended: 4–8)</label>
-        <div class="range-box">
-          <input type="range" id="max_dl" min="1" max="16" value="4" oninput="updateRangeVal('max_dl', 'max_dl_val')">
-          <span class="range-val" id="max_dl_val">4</span>
-        </div>
-        <div style="font-size: 11px; color: var(--text-muted); margin-top: 4px;">Downloads stream concurrently from Microsoft CDN endpoints.</div>
+  <!-- ── PANEL 1: Terminal Status ──────────────────────────── -->
+  <section id="panel-status" class="tab-panel active">
+    <div class="terminal-toolbar">
+      <div class="filter-group">
+        <span style="font-size: 11px; color: var(--text-muted); font-weight: 600; text-transform: uppercase;">Filter:</span>
+        <button type="button" class="filter-chip active" data-level="ALL" onclick="setLevelFilter('ALL')">ALL</button>
+        <button type="button" class="filter-chip" data-level="INFO" onclick="setLevelFilter('INFO')">INFO</button>
+        <button type="button" class="filter-chip" data-level="WARN" onclick="setLevelFilter('WARN')">WARN</button>
+        <button type="button" class="filter-chip" data-level="ERROR" onclick="setLevelFilter('ERROR')">ERROR</button>
+        <button type="button" class="filter-chip" data-level="DEBUG" onclick="setLevelFilter('DEBUG')">DEBUG</button>
+        <button type="button" class="filter-chip" data-level="TRACE" onclick="setLevelFilter('TRACE')">TRACE</button>
       </div>
-
-      <div>
-        <label>Max Parallel Uploads (Recommended: 2–3)</label>
-        <div class="range-box">
-          <input type="range" id="max_ul" min="1" max="8" value="2" oninput="updateRangeVal('max_ul', 'max_ul_val')">
-          <span class="range-val" id="max_ul_val">2</span>
+      <div style="display: flex; gap: 8px; align-items: center;">
+        <input type="text" id="search-input" class="search-box" placeholder="Search logs..." oninput="onSearchInput()" />
+        <div class="terminal-actions">
+          <button type="button" id="autoscroll-btn" class="term-action-btn active" onclick="toggleAutoScroll()">Auto-scroll: ON</button>
+          <button type="button" class="term-action-btn" onclick="copyLogs()">Copy</button>
+          <button type="button" class="term-action-btn" onclick="clearLogs()">Clear</button>
+          <button type="button" class="term-action-btn" onclick="openLogFile()">Log File</button>
         </div>
-        <div style="font-size: 11px; color: var(--text-muted); margin-top: 4px;">Uploads are chunk-buffered and rate-limit resilient.</div>
       </div>
     </div>
-  </div>
+    <div class="terminal-container" id="term-container">
+      <div id="term-body"></div>
+    </div>
+  </section>
 
-  <!-- Section 3: General & Scheduling -->
-  <div class="card">
-    <div class="card-title" style="margin-bottom: 8px;">⏱️ Sync Schedule & Logging</div>
-    <div class="card-desc">Adjust periodic reconciliation and logging verbosity.</div>
-
-    <div class="grid-2">
-      <div>
-        <label>Periodic Sync Interval (seconds)</label>
-        <input type="number" id="sync_interval" min="10" max="86400" step="10" value="300">
-        <div style="display: flex; gap: 6px; margin-top: 6px;">
-          <button class="btn btn-secondary btn-sm" onclick="setIntervalVal(60)">1m</button>
-          <button class="btn btn-secondary btn-sm" onclick="setIntervalVal(180)">3m</button>
-          <button class="btn btn-secondary btn-sm" onclick="setIntervalVal(300)">5m</button>
-          <button class="btn btn-secondary btn-sm" onclick="setIntervalVal(900)">15m</button>
-          <button class="btn btn-secondary btn-sm" onclick="setIntervalVal(3600)">1h</button>
+  <!-- ── PANEL 2: Preferences ──────────────────────────────── -->
+  <section id="panel-config" class="tab-panel">
+    <div class="config-container">
+      <!-- Card 1: Microsoft OneDrive Account -->
+      <div class="card">
+        <div class="card-header">
+          <div>
+            <div class="card-title"><span>☁️</span> Microsoft OneDrive Account</div>
+            <div class="card-desc">OAuth2 PKCE authorization with silent background token refresh via macOS Keychain</div>
+          </div>
+          <span style="font-size: 12px; font-weight: 600; color: var(--success); background: var(--success-bg); padding: 3px 10px; border-radius: 12px; border: 1px solid rgba(16, 185, 129, 0.3);">● Keychain Auth Active</span>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label class="form-label">Client ID (Entra Application ID)</label>
+            <input type="text" id="cfg-client-id" class="form-input" spellcheck="false" />
+          </div>
+          <div class="form-group">
+            <label class="form-label">Redirect URI</label>
+            <input type="text" id="cfg-redirect-uri" class="form-input" readonly value="http://localhost:8765/callback" />
+          </div>
+        </div>
+        <div style="font-size: 12px; color: var(--text-muted); display: flex; align-items: center; gap: 6px;">
+          <span>🔒 Refresh tokens are encrypted and managed automatically in your macOS Keychain.</span>
         </div>
       </div>
 
-      <div>
-        <label>Log Verbosity Level</label>
-        <select id="log_level">
-          <option value="trace">trace (ultra verbose)</option>
-          <option value="debug">debug (detailed diagnostic)</option>
-          <option value="info" selected>info (recommended)</option>
-          <option value="warn">warn (warnings & errors only)</option>
-          <option value="error">error (critical errors only)</option>
-        </select>
-        <div style="font-size: 11px; color: var(--text-muted); margin-top: 4px;">Controls terminal and logfile output volume.</div>
+      <!-- Card 2: Sync Folder Pairings -->
+      <div class="card">
+        <div class="card-header">
+          <div>
+            <div class="card-title"><span>📂</span> Sync Folders</div>
+            <div class="card-desc">Configure pairs between local Mac directories and remote OneDrive folders</div>
+          </div>
+          <span id="folder-count-badge" style="font-size: 12px; color: var(--text-muted);">0 folders</span>
+        </div>
+        <div id="folders-container"></div>
+        <button type="button" class="btn-add-folder" onclick="addFolder()">
+          <span>+</span> Add Sync Folder
+        </button>
+      </div>
+
+      <!-- Card 3: Sync Engine Settings -->
+      <div class="card">
+        <div class="card-header">
+          <div>
+            <div class="card-title"><span>⚡</span> Sync Engine Settings</div>
+            <div class="card-desc">Performance, interval frequency, and log verbosity configuration</div>
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label class="form-label">Full Sync Interval (Seconds)</label>
+            <input type="number" id="cfg-interval" class="form-input" min="10" step="10" />
+            <small style="color: var(--text-muted); font-size: 11px;">Periodic full reconciliation pass (real-time changes sync immediately)</small>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Log Level</label>
+            <select id="cfg-log-level" class="form-input">
+              <option value="trace">Trace (Most verbose)</option>
+              <option value="debug">Debug (Detailed)</option>
+              <option value="info">Info (Default / Recommended)</option>
+              <option value="warn">Warn (Warnings and errors only)</option>
+              <option value="error">Error (Errors only)</option>
+            </select>
+            <small style="color: var(--text-muted); font-size: 11px;">Controls level of messages emitted to console and cloudsync.log</small>
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label class="form-label">Max Parallel Downloads</label>
+            <input type="number" id="cfg-max-dl" class="form-input" min="1" max="16" />
+            <small style="color: var(--text-muted); font-size: 11px;">Concurrent threads downloading files from OneDrive</small>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Max Parallel Uploads</label>
+            <input type="number" id="cfg-max-ul" class="form-input" min="1" max="16" />
+            <small style="color: var(--text-muted); font-size: 11px;">Concurrent threads uploading files to OneDrive</small>
+          </div>
+        </div>
+      </div>
+
+      <!-- Card 4: System Integration -->
+      <div class="card">
+        <div class="card-header">
+          <div>
+            <div class="card-title"><span>🖥️</span> System Integration</div>
+            <div class="card-desc">Manage startup behavior and access local configuration files</div>
+          </div>
+        </div>
+        <div style="display: flex; justify-content: space-between; align-items: center; padding: 6px 0 16px;">
+          <div>
+            <div style="font-weight: 600; font-size: 13px;">Launch CloudSync automatically on login</div>
+            <div style="color: var(--text-muted); font-size: 12px;">Starts CloudSync silently in the menu bar when your Mac boots up</div>
+          </div>
+          <label class="switch">
+            <input type="checkbox" id="cfg-autostart" onchange="toggleAutostart(this.checked)" />
+            <span class="slider"></span>
+          </label>
+        </div>
+        <div style="padding-top: 14px; border-top: 1px solid rgba(255, 255, 255, 0.05); display: flex; justify-content: space-between; align-items: center;">
+          <div style="color: var(--text-muted); font-size: 12px;">
+            Configuration folder: <code>~/Library/Application Support/cloudsync/</code>
+          </div>
+          <button type="button" class="btn-browse" onclick="revealConfigDir()">Reveal Config In Finder</button>
+        </div>
       </div>
     </div>
 
-    <div style="margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--card-border); display: flex; align-items: center; justify-content: space-between;">
-      <div>
-        <div style="font-weight: 600; font-size: 13px; color: var(--text-main);">🚀 Open at Login</div>
-        <div style="font-size: 12px; color: var(--text-muted); margin-top: 2px;">Automatically start CloudSync in your menu bar when signing in to macOS.</div>
-      </div>
-      <label class="switch">
-        <input type="checkbox" id="autostart_toggle" onchange="toggleAutostart(this.checked)">
-        <span class="slider"></span>
-      </label>
+    <!-- Sticky Bottom Bar -->
+    <div class="sticky-actions-bar">
+      <div id="save-status-msg" style="color: var(--text-muted); font-size: 13px; margin-right: auto;"></div>
+      <button type="button" class="btn-reset" onclick="loadConfig()">Reset</button>
+      <button type="button" class="btn-save" onclick="saveConfig()">Save Preferences</button>
     </div>
-  </div>
+  </section>
 
-  <!-- Section 4: File Exclusions -->
-  <div class="card">
-    <div class="card-title" style="margin-bottom: 8px;">🚫 Exclude File Patterns</div>
-    <div class="card-desc">Glob patterns for files or folders ignored during synchronization.</div>
+</main>
 
-    <div class="chips" id="chips-container"></div>
-    <div class="input-group">
-      <input type="text" id="new-pattern" placeholder="e.g. *.tmp, **/.git/**, ~$*" onkeydown="if(event.key==='Enter')addPattern()">
-      <button class="btn btn-secondary btn-sm" onclick="addPattern()">Add Pattern</button>
-      <button class="btn btn-secondary btn-sm" onclick="resetDefaultPatterns()">Defaults</button>
-    </div>
-  </div>
-
-  <!-- Section 5: OneDrive & Azure AD -->
-  <div class="card">
-    <div class="card-title" style="margin-bottom: 8px;">🔐 OneDrive / Azure AD Settings</div>
-    <div class="card-desc">OAuth2 credentials registered in your personal Azure Portal.</div>
-
-    <div class="grid-2">
-      <div>
-        <label>Azure Application (Client) ID</label>
-        <input type="text" id="client_id" placeholder="e.g. 00000000-0000-0000-0000-000000000000">
-      </div>
-      <div>
-        <label>OAuth2 Redirect URI</label>
-        <input type="text" id="redirect_uri" value="http://localhost:8765/callback">
-      </div>
-    </div>
-  </div>
-</div>
-
-<!-- Sticky Bottom Bar -->
-<div class="sticky-bar">
-  <div class="sticky-content">
-    <div class="quick-links">
-      <a href="/status" class="btn btn-secondary btn-sm" style="text-decoration: none;">📊 Terminal Status</a>
-      <button class="btn btn-secondary btn-sm" onclick="syncNow()">⚡ Sync Now</button>
-      <button class="btn btn-secondary btn-sm" onclick="openConfigFile()">📝 config.toml</button>
-      <button class="btn btn-secondary btn-sm" onclick="openConfigDir()">📂 Open in Finder</button>
-    </div>
-    <button class="btn btn-primary" onclick="saveConfig()">💾 Save & Apply Changes</button>
-  </div>
-</div>
+<div id="toast" class="toast"></div>
 
 <script>
+// ── Global Tab Switching ────────────────────────────────────
+function switchTab(tab) {
+  const isStatus = (tab === 'status');
+  document.getElementById('tab-btn-status').classList.toggle('active', isStatus);
+  document.getElementById('tab-btn-config').classList.toggle('active', !isStatus);
+  document.getElementById('panel-status').classList.toggle('active', isStatus);
+  document.getElementById('panel-config').classList.toggle('active', !isStatus);
+
+  try {
+    history.replaceState(null, '', '#' + tab);
+  } catch (e) {}
+
+  if (isStatus && autoScroll) {
+    const c = document.getElementById('term-container');
+    c.scrollTop = c.scrollHeight;
+  }
+  if (!isStatus && !configLoaded) {
+    loadConfig();
+  }
+}
+
+// ── Status & Live Terminal Logic ────────────────────────────
+let lastLogId = 0;
+let autoScroll = true;
+let currentLevelFilter = 'ALL';
+let currentSearch = '';
+let allLogs = [];
+
+function toggleAutoScroll() {
+  autoScroll = !autoScroll;
+  const btn = document.getElementById('autoscroll-btn');
+  btn.textContent = autoScroll ? 'Auto-scroll: ON' : 'Auto-scroll: OFF';
+  btn.classList.toggle('active', autoScroll);
+  if (autoScroll) {
+    const c = document.getElementById('term-container');
+    c.scrollTop = c.scrollHeight;
+  }
+}
+
+function setLevelFilter(lvl) {
+  currentLevelFilter = lvl;
+  document.querySelectorAll('.filter-chip').forEach(c => {
+    c.classList.toggle('active', c.getAttribute('data-level') === lvl);
+  });
+  renderFilteredLogs();
+}
+
+function onSearchInput() {
+  currentSearch = document.getElementById('search-input').value.trim().toLowerCase();
+  renderFilteredLogs();
+}
+
+function parseLogLine(text) {
+  const m = text.match(/^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+Z)?\s*(INFO|WARN|ERROR|DEBUG|TRACE)?\s*(.*)$/);
+  if (m) {
+    let time = m[1] ? m[1].substring(11, 19) : '';
+    let level = m[2] || 'INFO';
+    let msg = m[3] || text;
+    return { time, level, msg };
+  }
+  return { time: '', level: 'INFO', msg: text };
+}
+
+function renderFilteredLogs() {
+  const body = document.getElementById('term-body');
+  body.innerHTML = '';
+  const search = currentSearch;
+  const filter = currentLevelFilter;
+
+  for (let entry of allLogs) {
+    const p = parseLogLine(entry.text);
+    if (filter !== 'ALL' && p.level !== filter) continue;
+    if (search && !entry.text.toLowerCase().includes(search)) continue;
+
+    const row = document.createElement('div');
+    row.className = 'log-row';
+
+    let msgHtml = escapeHtml(p.msg);
+    if (search) {
+      const re = new RegExp('(' + escapeRegex(search) + ')', 'gi');
+      msgHtml = msgHtml.replace(re, '<span class="highlight">$1</span>');
+    }
+
+    row.innerHTML = `
+      <span class="log-id">${entry.id}</span>
+      <span class="log-time">${p.time}</span>
+      <span class="log-level level-${p.level.toLowerCase()}">${p.level}</span>
+      <span class="log-msg">${msgHtml}</span>
+    `;
+    body.appendChild(row);
+  }
+
+  if (autoScroll) {
+    const c = document.getElementById('term-container');
+    c.scrollTop = c.scrollHeight;
+  }
+}
+
+async function fetchLogs() {
+  try {
+    const res = await fetch(`/api/logs?since=${lastLogId}`);
+    if (!res.ok) return;
+    const data = await res.json();
+    if (data.logs && data.logs.length > 0) {
+      let isFirstFetch = (lastLogId === 0);
+      for (let l of data.logs) {
+        allLogs.push(l);
+        if (l.id > lastLogId) lastLogId = l.id;
+      }
+      if (allLogs.length > 3000) {
+        allLogs = allLogs.slice(allLogs.length - 3000);
+      }
+      renderFilteredLogs();
+
+      // Check for sync indicator
+      const latest = data.logs[data.logs.length - 1].text;
+      const indicator = document.getElementById('sync-status-indicator');
+      if (latest.includes('Starting sync') || latest.includes('Reconciliation') || latest.includes('Downloading')) {
+        indicator.textContent = '● Syncing…';
+        indicator.className = 'status-pill status-syncing';
+      } else if (latest.includes('done') || latest.includes('Watching for changes') || latest.includes('Idle')) {
+        indicator.textContent = '● Idle';
+        indicator.className = 'status-pill status-idle';
+      }
+    }
+  } catch (e) {}
+}
+
+async function clearLogs() {
+  try {
+    await fetch('/api/logs/clear', { method: 'POST' });
+    allLogs = [];
+    document.getElementById('term-body').innerHTML = '';
+  } catch (e) {}
+}
+
+function copyLogs() {
+  const text = allLogs.map(l => l.text).join('\n');
+  navigator.clipboard.writeText(text).then(() => {
+    showToast('✓ Logs copied to clipboard');
+  });
+}
+
+async function openLogFile() {
+  try {
+    await fetch('/api/open-log-file', { method: 'POST' });
+  } catch (e) {}
+}
+
+async function triggerManualSync() {
+  const btn = document.getElementById('quick-sync-btn');
+  btn.textContent = '↻ Syncing…';
+  try {
+    await fetch('/api/sync-now', { method: 'POST' });
+    showToast('✓ Sync pass initiated');
+  } catch (e) {}
+  setTimeout(() => { btn.textContent = '↻ Sync Now'; }, 1500);
+}
+
+// ── Preferences / Config Logic ──────────────────────────────
 let currentConfig = null;
-let patterns = [];
-
-function showToast(msg, isError = false) {
-  const t = document.getElementById('toast');
-  t.innerHTML = (isError ? '❌ ' : '✅ ') + msg;
-  t.style.borderColor = isError ? 'var(--danger)' : 'var(--accent)';
-  t.classList.add('show');
-  setTimeout(() => t.classList.remove('show'), 3500);
-}
-
-function updateRangeVal(sliderId, labelId) {
-  document.getElementById(labelId).innerText = document.getElementById(sliderId).value;
-}
-
-function setIntervalVal(secs) {
-  document.getElementById('sync_interval').value = secs;
-}
+let configLoaded = false;
 
 async function loadConfig() {
   try {
     const res = await fetch('/api/config');
+    if (!res.ok) return;
     currentConfig = await res.json();
+    configLoaded = true;
 
-    // Parent folder
-    document.getElementById('parent_folder').value = currentConfig.local_parent_folder || "";
+    document.getElementById('cfg-client-id').value = currentConfig.onedrive?.client_id || '';
+    document.getElementById('cfg-redirect-uri').value = currentConfig.onedrive?.redirect_uri || 'http://localhost:8765/callback';
+    document.getElementById('cfg-interval').value = currentConfig.sync_interval_secs || 3600;
+    document.getElementById('cfg-log-level').value = currentConfig.log_level || 'info';
+    document.getElementById('cfg-max-dl').value = currentConfig.max_parallel_downloads || 4;
+    document.getElementById('cfg-max-ul').value = currentConfig.max_parallel_uploads || 2;
 
-    // Folders
-    const rawFolders = currentConfig.sync_folders && currentConfig.sync_folders.length > 0
-      ? currentConfig.sync_folders
-      : [{
-          local_folder: currentConfig.local_folder || "",
-          remote_folder: currentConfig.remote_folder || "",
-          enabled: true
-        }];
-
-    renderFolders(rawFolders);
-
-    // Concurrency
-    document.getElementById('max_dl').value = currentConfig.max_parallel_downloads || 4;
-    document.getElementById('max_dl_val').innerText = currentConfig.max_parallel_downloads || 4;
-    document.getElementById('max_ul').value = currentConfig.max_parallel_uploads || 2;
-    document.getElementById('max_ul_val').innerText = currentConfig.max_parallel_uploads || 2;
-
-    // Interval & Log
-    document.getElementById('sync_interval').value = currentConfig.sync_interval_secs || 300;
-    document.getElementById('log_level').value = currentConfig.log_level || 'info';
-
-    // Patterns
-    patterns = currentConfig.exclude_patterns || [".DS_Store", "**/.git/**", "*.tmp", "~$*", "Thumbs.db"];
-    renderPatterns();
-
-    // Azure
-    if (currentConfig.onedrive) {
-      document.getElementById('client_id').value = currentConfig.onedrive.client_id || '';
-      document.getElementById('redirect_uri').value = currentConfig.onedrive.redirect_uri || 'http://localhost:8765/callback';
-    }
-
+    renderFolders();
     loadAutostart();
-  } catch (err) {
-    showToast('Failed to load configuration: ' + err, true);
+  } catch (e) {
+    showToast('Failed to load configuration');
+  }
+}
+
+function renderFolders() {
+  const container = document.getElementById('folders-container');
+  container.innerHTML = '';
+  const folders = currentConfig.sync_folders || [];
+  document.getElementById('folder-count-badge').textContent = `${folders.length} folder${folders.length === 1 ? '' : 's'}`;
+
+  folders.forEach((f, idx) => {
+    const div = document.createElement('div');
+    div.className = 'folder-item';
+    div.innerHTML = `
+      <div class="folder-item-header">
+        <div style="font-weight: 600; font-size: 13px; display: flex; align-items: center; gap: 6px;">
+          <span>📁</span>
+          <input type="text" value="${escapeHtml(f.subfolder || '')}"
+            placeholder="Folder Name (e.g. Documents)"
+            style="background: transparent; border: 1px solid transparent; color: #fff; font-weight: 600; font-size: 13px; border-radius: 4px; padding: 2px 6px;"
+            onfocus="this.style.borderColor='var(--accent)'; this.style.background='var(--input-bg)'"
+            onblur="this.style.borderColor='transparent'; this.style.background='transparent'"
+            onchange="updateFolder(${idx}, 'subfolder', this.value)" />
+        </div>
+        <div style="display: flex; align-items: center; gap: 12px;">
+          <label style="font-size: 12px; color: var(--text-secondary); display: flex; align-items: center; gap: 6px; cursor: pointer;">
+            <input type="checkbox" ${f.enabled !== false ? 'checked' : ''} onchange="updateFolder(${idx}, 'enabled', this.checked)" />
+            Enabled
+          </label>
+          <button type="button" class="btn-remove-folder" onclick="removeFolder(${idx})">Delete</button>
+        </div>
+      </div>
+      <div class="form-group" style="margin-bottom: 6px;">
+        <label class="form-label">Local Mac Folder</label>
+        <div class="folder-input-group">
+          <input type="text" class="form-input" style="flex: 1;" value="${escapeHtml(f.local_folder || '')}"
+            placeholder="/Users/.../path" onchange="updateFolder(${idx}, 'local_folder', this.value)" />
+          <button type="button" class="btn-browse" onclick="browseFolder(${idx})">Choose…</button>
+        </div>
+      </div>
+      <div class="form-group" style="margin-bottom: 0;">
+        <label class="form-label">Remote OneDrive Path</label>
+        <input type="text" class="form-input" value="${escapeHtml(f.remote_folder || '')}"
+          placeholder="/RemoteFolder" onchange="updateFolder(${idx}, 'remote_folder', this.value)" />
+      </div>
+    `;
+    container.appendChild(div);
+  });
+}
+
+function updateFolder(idx, field, value) {
+  if (currentConfig && currentConfig.sync_folders && currentConfig.sync_folders[idx]) {
+    currentConfig.sync_folders[idx][field] = value;
+  }
+}
+
+function addFolder() {
+  if (!currentConfig) return;
+  if (!currentConfig.sync_folders) currentConfig.sync_folders = [];
+  currentConfig.sync_folders.push({
+    subfolder: "New Folder",
+    local_folder: "",
+    remote_folder: "/New Folder",
+    enabled: true
+  });
+  renderFolders();
+}
+
+function removeFolder(idx) {
+  if (!currentConfig || !currentConfig.sync_folders) return;
+  currentConfig.sync_folders.splice(idx, 1);
+  renderFolders();
+}
+
+async function browseFolder(idx) {
+  try {
+    const res = await fetch('/api/browse-folder', { method: 'POST' });
+    const data = await res.json();
+    if (data.path) {
+      updateFolder(idx, 'local_folder', data.path);
+      renderFolders();
+    }
+  } catch (e) {}
+}
+
+async function saveConfig() {
+  if (!currentConfig) return;
+  currentConfig.onedrive = currentConfig.onedrive || {};
+  currentConfig.onedrive.client_id = document.getElementById('cfg-client-id').value.trim();
+  currentConfig.onedrive.redirect_uri = document.getElementById('cfg-redirect-uri').value.trim();
+  currentConfig.sync_interval_secs = parseInt(document.getElementById('cfg-interval').value, 10) || 3600;
+  currentConfig.log_level = document.getElementById('cfg-log-level').value;
+  currentConfig.max_parallel_downloads = parseInt(document.getElementById('cfg-max-dl').value, 10) || 4;
+  currentConfig.max_parallel_uploads = parseInt(document.getElementById('cfg-max-ul').value, 10) || 2;
+
+  const msgEl = document.getElementById('save-status-msg');
+  msgEl.textContent = 'Saving…';
+  try {
+    const res = await fetch('/api/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(currentConfig)
+    });
+    if (res.ok) {
+      msgEl.textContent = '✓ Saved successfully!';
+      showToast('✓ Preferences saved & applied!');
+      setTimeout(() => { msgEl.textContent = ''; }, 3000);
+    } else {
+      msgEl.textContent = '❌ Failed to save';
+    }
+  } catch (e) {
+    msgEl.textContent = '❌ Network error';
   }
 }
 
 async function loadAutostart() {
   try {
     const res = await fetch('/api/autostart');
-    const data = await res.json();
-    document.getElementById('autostart_toggle').checked = !!data.autostart;
-  } catch (e) {
-    console.error('Failed to load autostart status:', e);
-  }
+    if (res.ok) {
+      const data = await res.json();
+      document.getElementById('cfg-autostart').checked = !!data.autostart;
+    }
+  } catch (e) {}
 }
 
 async function toggleAutostart(enable) {
   try {
-    const res = await fetch('/api/autostart', {
+    await fetch('/api/autostart', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ enable })
     });
-    const data = await res.json();
-    document.getElementById('autostart_toggle').checked = !!data.autostart;
-    showToast(data.autostart ? 'Auto-start at login enabled' : 'Auto-start at login disabled', false);
-  } catch (e) {
-    showToast('Failed to update autostart setting: ' + e, true);
-  }
+    loadAutostart();
+  } catch (e) {}
 }
 
-function renderFolders(folders) {
-  const container = document.getElementById('folders-list');
-  container.innerHTML = '';
-  const parent = document.getElementById('parent_folder').value.trim();
-
-  folders.forEach((f, idx) => {
-    let subVal = f.subfolder || "";
-    let localVal = f.local_folder || "";
-    if (!subVal && localVal && parent && localVal.startsWith(parent)) {
-      subVal = localVal.slice(parent.length).replace(/^[\\\/]+/, '');
-    }
-    const valToShow = subVal || localVal;
-
-    const div = document.createElement('div');
-    div.className = 'folder-item';
-    div.innerHTML = `
-      <div class="folder-row">
-        <div>
-          <label>Subfolder / Local Path</label>
-          <div class="input-group">
-            <input type="text" id="folder_input_${idx}" value="${escapeHtml(valToShow)}" placeholder="e.g. SheridanFiles/Pictures" oninput="updateItemPreview(${idx})">
-            <button class="btn btn-secondary btn-sm" onclick="browseFolder(${idx})">📁 Browse…</button>
-          </div>
-          <div id="preview_${idx}" style="font-size: 11px; color: var(--text-muted); margin-top: 4px; font-family: monospace;"></div>
-        </div>
-        <div>
-          <label>OneDrive Remote Folder Path</label>
-          <input type="text" id="remote_folder_${idx}" value="${escapeHtml(f.remote_folder || '')}" placeholder="e.g. /SheridanFiles/Pictures">
-        </div>
-      </div>
-      <div class="folder-actions">
-        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;text-transform:none;font-size:13px;color:var(--text-main);margin:0;">
-          <input type="checkbox" id="enabled_${idx}" ${f.enabled !== false ? 'checked' : ''}>
-          <span>Bi-directional sync enabled</span>
-        </label>
-        ${folders.length > 1 ? `<button class="btn btn-danger btn-sm" onclick="removeFolderPair(${idx})">🗑️ Remove</button>` : ''}
-      </div>
-    `;
-    container.appendChild(div);
-    updateItemPreview(idx);
-  });
-}
-
-function updateItemPreview(idx) {
-  const parent = document.getElementById('parent_folder').value.trim();
-  const inputEl = document.getElementById(`folder_input_${idx}`);
-  const previewEl = document.getElementById(`preview_${idx}`);
-  if (!inputEl || !previewEl) return;
-
-  const val = inputEl.value.trim();
-  if (parent) {
-    const cleanSub = val.replace(/^[\\\/]+/, '');
-    const cleanParent = parent.replace(/[\\\/]+$/, '');
-    const full = val.startsWith('/') ? val : `${cleanParent}/${cleanSub}`;
-    previewEl.innerText = `Full: ${full}`;
-  } else {
-    previewEl.innerText = val ? `Full: ${val}` : '';
-  }
-}
-
-function updatePreviews() {
-  const items = document.querySelectorAll('.folder-item');
-  items.forEach((_, idx) => updateItemPreview(idx));
-}
-
-function addFolderPair() {
-  const folders = collectFolders();
-  folders.push({ subfolder: '', remote_folder: '', enabled: true });
-  renderFolders(folders);
-}
-
-function removeFolderPair(idx) {
-  const folders = collectFolders();
-  folders.splice(idx, 1);
-  renderFolders(folders);
-}
-
-async function browseParentFolder() {
+async function revealConfigDir() {
   try {
-    showToast("Opening macOS folder picker for Parent Folder…");
-    const res = await fetch('/api/browse-folder', { method: 'POST' });
-    const data = await res.json();
-    if (data.path) {
-      document.getElementById('parent_folder').value = data.path;
-      updatePreviews();
-      showToast("Selected Parent: " + data.path);
-    }
-  } catch (err) {
-    showToast("Browse folder error: " + err, true);
-  }
+    await fetch('/api/open-config-dir', { method: 'POST' });
+  } catch (e) {}
 }
-
-async function browseFolder(idx) {
-  try {
-    showToast("Opening macOS folder picker…");
-    const res = await fetch('/api/browse-folder', { method: 'POST' });
-    const data = await res.json();
-    if (data.path) {
-      const parent = document.getElementById('parent_folder').value.trim();
-      let selected = data.path;
-      if (parent && selected.startsWith(parent)) {
-        selected = selected.slice(parent.length).replace(/^[\\\/]+/, '');
-      }
-      document.getElementById(`folder_input_${idx}`).value = selected;
-      updateItemPreview(idx);
-
-      // Auto-fill remote if empty
-      const remoteInput = document.getElementById(`remote_folder_${idx}`);
-      if (!remoteInput.value.trim()) {
-        remoteInput.value = '/' + selected.replace(/^[\\\/]+/, '');
-      }
-      showToast("Selected: " + selected);
-    }
-  } catch (err) {
-    showToast("Browse folder error: " + err, true);
-  }
-}
-
-function collectFolders() {
-  const items = document.querySelectorAll('.folder-item');
-  const parent = document.getElementById('parent_folder').value.trim();
-  const folders = [];
-
-  items.forEach((item, idx) => {
-    const val = document.getElementById(`folder_input_${idx}`).value.trim();
-    let remote = document.getElementById(`remote_folder_${idx}`).value.trim();
-    const enabled = document.getElementById(`enabled_${idx}`).checked;
-
-    if (!remote && val) {
-      remote = '/' + val.replace(/^[\\\/]+/, '');
-    }
-
-    if (parent && !val.startsWith('/')) {
-      folders.push({
-        subfolder: val,
-        remote_folder: remote,
-        enabled: enabled
-      });
-    } else {
-      folders.push({
-        local_folder: val,
-        remote_folder: remote,
-        enabled: enabled
-      });
-    }
-  });
-
-  return folders;
-}
-
-function renderPatterns() {
-  const container = document.getElementById('chips-container');
-  container.innerHTML = '';
-  patterns.forEach((pat, i) => {
-    const chip = document.createElement('div');
-    chip.className = 'chip';
-    chip.innerHTML = `<span>${escapeHtml(pat)}</span><span class="chip-remove" onclick="removePattern(${i})">×</span>`;
-    container.appendChild(chip);
-  });
-}
-
-function addPattern() {
-  const input = document.getElementById('new-pattern');
-  const val = input.value.trim();
-  if (val && !patterns.includes(val)) {
-    patterns.push(val);
-    renderPatterns();
-    input.value = '';
-  }
-}
-
-function removePattern(i) {
-  patterns.splice(i, 1);
-  renderPatterns();
-}
-
-function resetDefaultPatterns() {
-  patterns = [".DS_Store", "**/.git/**", "**/.gitignore", "*.tmp", "*.swp", "~$*", "Thumbs.db"];
-  renderPatterns();
-}
-
-async function saveConfig() {
-  const parentFolder = document.getElementById('parent_folder').value.trim();
-  const folders = collectFolders();
-  if (folders.length === 0 || (!folders[0].subfolder && !folders[0].local_folder)) {
-    showToast("Please provide at least one local sync folder path or subfolder", true);
-    return;
-  }
-
-  const newConfig = {
-    local_parent_folder: parentFolder || null,
-    sync_folders: folders,
-    sync_interval_secs: parseInt(document.getElementById('sync_interval').value, 10) || 300,
-    max_parallel_downloads: parseInt(document.getElementById('max_dl').value, 10) || 4,
-    max_parallel_uploads: parseInt(document.getElementById('max_ul').value, 10) || 2,
-    log_level: document.getElementById('log_level').value,
-    exclude_patterns: patterns,
-    onedrive: {
-      client_id: document.getElementById('client_id').value.trim(),
-      redirect_uri: document.getElementById('redirect_uri').value.trim() || 'http://localhost:8765/callback'
-    }
-  };
-
-  try {
-    const res = await fetch('/api/config', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(newConfig)
-    });
-    const result = await res.json();
-    if (res.ok && result.status === 'ok') {
-      showToast("Settings saved and applied successfully!");
-    } else {
-      showToast("Error: " + (result.message || "Failed to save"), true);
-    }
-  } catch (err) {
-    showToast("Network error saving configuration: " + err, true);
-  }
-}
-
-async function syncNow() {
-  try {
-    await fetch('/api/sync-now', { method: 'POST' });
-    showToast("Sync triggered!");
-  } catch (err) {
-    showToast("Sync trigger failed: " + err, true);
-  }
-}
-
-async function openConfigFile() {
-  await fetch('/api/open-config-file', { method: 'POST' });
-}
-
-async function openConfigDir() {
-  await fetch('/api/open-config-dir', { method: 'POST' });
-}
-
-function escapeHtml(str) {
-  return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-}
-
-window.onload = loadConfig;
-</script>
-</body>
-</html>
-"#;
-
-const STATUS_HTML: &str = r#"<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>CloudSync Console — Status & Live Terminal</title>
-<style>
-  :root {
-    --bg-main: #0a0e17;
-    --bg-card: #121824;
-    --bg-term: #06090f;
-    --border: rgba(255, 255, 255, 0.1);
-    --border-accent: rgba(88, 166, 255, 0.35);
-    --text-primary: #e6edf3;
-    --text-secondary: #8b949e;
-    --text-muted: #484f58;
-    --accent: #58a6ff;
-    --success: #3fb950;
-    --warning: #d29922;
-    --error: #f85149;
-    --cyan: #39c5bb;
-    --font-mono: ui-monospace, "SF Mono", Menlo, Monaco, Consolas, "Liberation Mono", monospace;
-  }
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  body {
-    background: var(--bg-main);
-    color: var(--text-primary);
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-    min-height: 100vh;
-    display: flex;
-    flex-direction: column;
-  }
-  .app-header {
-    background: rgba(18, 24, 36, 0.95);
-    backdrop-filter: blur(14px);
-    border-bottom: 1px solid var(--border);
-    padding: 12px 24px;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    position: sticky;
-    top: 0;
-    z-index: 100;
-  }
-  .app-title {
-    display: flex;
-    align-items: center;
-    gap: 14px;
-  }
-  .traffic-lights {
-    display: flex;
-    gap: 7px;
-  }
-  .dot {
-    width: 12px;
-    height: 12px;
-    border-radius: 50%;
-  }
-  .dot-red { background: #ff5f56; }
-  .dot-yellow { background: #ffbd2e; }
-  .dot-green { background: #27c93f; }
-  .title-text {
-    font-size: 15px;
-    font-weight: 700;
-    letter-spacing: -0.3px;
-    display: flex;
-    align-items: center;
-    gap: 10px;
-  }
-  .status-badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 3px 10px;
-    border-radius: 12px;
-    font-size: 11px;
-    font-weight: 600;
-    background: rgba(63, 185, 80, 0.15);
-    color: var(--success);
-    border: 1px solid rgba(63, 185, 80, 0.3);
-  }
-  .status-badge.syncing {
-    background: rgba(88, 166, 255, 0.15);
-    color: var(--accent);
-    border-color: rgba(88, 166, 255, 0.3);
-  }
-  .status-pulse {
-    width: 7px;
-    height: 7px;
-    border-radius: 50%;
-    background: currentColor;
-    box-shadow: 0 0 8px currentColor;
-    animation: pulse 1.5s infinite;
-  }
-  @keyframes pulse {
-    0%, 100% { opacity: 1; transform: scale(1); }
-    50% { opacity: 0.4; transform: scale(0.85); }
-  }
-  .header-actions {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-  }
-  .btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 6px 14px;
-    border-radius: 6px;
-    font-size: 12px;
-    font-weight: 600;
-    cursor: pointer;
-    text-decoration: none;
-    border: none;
-    transition: all 0.15s ease;
-  }
-  .btn-primary {
-    background: #238636;
-    color: white;
-  }
-  .btn-primary:hover { background: #2ea043; }
-  .btn-secondary {
-    background: rgba(255, 255, 255, 0.08);
-    color: var(--text-primary);
-    border: 1px solid var(--border);
-  }
-  .btn-secondary:hover {
-    background: rgba(255, 255, 255, 0.14);
-    border-color: rgba(255, 255, 255, 0.2);
-  }
-  .main-content {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    padding: 16px 24px 24px;
-    max-width: 1400px;
-    margin: 0 auto;
-    width: 100%;
-    gap: 14px;
-  }
-  .stats-row {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-    gap: 12px;
-  }
-  .stat-card {
-    background: var(--bg-card);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 12px 16px;
-  }
-  .stat-label {
-    font-size: 11px;
-    color: var(--text-secondary);
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-    margin-bottom: 4px;
-  }
-  .stat-val {
-    font-size: 16px;
-    font-weight: 700;
-    color: var(--text-primary);
-  }
-  .terminal-frame {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    background: var(--bg-term);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    overflow: hidden;
-    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6);
-    min-height: 520px;
-  }
-  .terminal-bar {
-    background: #111723;
-    border-bottom: 1px solid var(--border);
-    padding: 8px 14px;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    flex-wrap: wrap;
-  }
-  .filter-controls {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-  .search-box {
-    background: rgba(0, 0, 0, 0.45);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 5px 10px;
-    color: var(--text-primary);
-    font-size: 12px;
-    width: 240px;
-  }
-  .search-box:focus {
-    outline: none;
-    border-color: var(--accent);
-  }
-  .level-tag {
-    background: transparent;
-    border: 1px solid var(--border);
-    color: var(--text-secondary);
-    padding: 3px 9px;
-    border-radius: 4px;
-    font-size: 11px;
-    cursor: pointer;
-  }
-  .level-tag.active {
-    background: rgba(88, 166, 255, 0.2);
-    color: var(--accent);
-    border-color: var(--accent);
-  }
-  .terminal-tools {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-  }
-  .scroll-label {
-    font-size: 12px;
-    color: var(--text-secondary);
-    display: flex;
-    align-items: center;
-    gap: 5px;
-    cursor: pointer;
-  }
-  .terminal-body {
-    flex: 1;
-    padding: 14px 18px;
-    overflow-y: auto;
-    font-family: var(--font-mono);
-    font-size: 12.5px;
-    line-height: 1.6;
-    max-height: calc(100vh - 280px);
-  }
-  .term-line {
-    display: flex;
-    gap: 12px;
-    white-space: pre-wrap;
-    word-break: break-all;
-  }
-  .term-line:hover {
-    background: rgba(255, 255, 255, 0.03);
-  }
-  .line-num {
-    color: var(--text-muted);
-    min-width: 48px;
-    text-align: right;
-    user-select: none;
-    font-size: 11px;
-    line-height: 1.8;
-  }
-  .line-text {
-    flex: 1;
-  }
-  .highlight-info { color: #58a6ff; font-weight: 600; }
-  .highlight-warn { color: var(--warning); font-weight: 600; }
-  .highlight-error { color: var(--error); font-weight: bold; }
-  .highlight-upload { color: var(--cyan); font-weight: 600; }
-  .highlight-done { color: var(--success); font-weight: 600; }
-  .highlight-folder { color: #f0f6fc; }
-  .highlight-time { color: #6e7681; }
-  .term-cursor {
-    display: inline-block;
-    width: 8px;
-    height: 15px;
-    background: var(--accent);
-    vertical-align: middle;
-    margin-left: 4px;
-    animation: blink 1s infinite;
-  }
-  @keyframes blink {
-    0%, 49% { opacity: 1; }
-    50%, 100% { opacity: 0; }
-  }
-  #toast {
-    position: fixed;
-    top: 20px;
-    right: 20px;
-    background: #1c2433;
-    border: 1px solid var(--accent);
-    color: #fff;
-    padding: 10px 18px;
-    border-radius: 6px;
-    font-size: 13px;
-    opacity: 0;
-    transform: translateY(-8px);
-    transition: all 0.2s;
-    pointer-events: none;
-    z-index: 200;
-  }
-  #toast.show { opacity: 1; transform: translateY(0); }
-</style>
-</head>
-<body>
-
-<div id="toast"></div>
-
-<header class="app-header">
-  <div class="app-title">
-    <div class="traffic-lights">
-      <div class="dot dot-red"></div>
-      <div class="dot dot-yellow"></div>
-      <div class="dot dot-green"></div>
-    </div>
-    <div class="title-text">
-      <span>☁️ CloudSync Terminal Console</span>
-      <span class="status-badge" id="app-badge"><span class="status-pulse"></span><span id="badge-text">Idle</span></span>
-    </div>
-  </div>
-  <div class="header-actions">
-    <button class="btn btn-primary" onclick="syncNow()">⚡ Sync Now</button>
-    <a href="/config" class="btn btn-secondary">⚙️ Preferences (Config)</a>
-  </div>
-</header>
-
-<div class="main-content">
-  <div class="stats-row">
-    <div class="stat-card">
-      <div class="stat-label">Sync Folders</div>
-      <div class="stat-val" id="stat-folders">Loading…</div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-label">Interval</div>
-      <div class="stat-val" id="stat-interval">300s</div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-label">Terminal Stream</div>
-      <div class="stat-val" id="stat-lines">0 lines</div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-label">Log File</div>
-      <div class="stat-val" style="font-size: 13px; font-weight: normal; color: var(--accent); cursor: pointer;" onclick="openLogFile()">📄 cloudsync.log</div>
-    </div>
-  </div>
-
-  <div class="terminal-frame">
-    <div class="terminal-bar">
-      <div class="filter-controls">
-        <input type="text" class="search-box" id="search-filter" placeholder="🔍 Filter terminal logs..." oninput="renderFilteredLogs()">
-        <button class="level-tag active" data-lvl="all" onclick="setLevelFilter('all')">All</button>
-        <button class="level-tag" data-lvl="info" onclick="setLevelFilter('info')">INFO</button>
-        <button class="level-tag" data-lvl="upload" onclick="setLevelFilter('upload')">Uploads</button>
-        <button class="level-tag" data-lvl="warn" onclick="setLevelFilter('warn')">WARN</button>
-        <button class="level-tag" data-lvl="error" onclick="setLevelFilter('error')">ERROR</button>
-      </div>
-      <div class="terminal-tools">
-        <label class="scroll-label">
-          <input type="checkbox" id="auto-scroll" checked> Auto-scroll
-        </label>
-        <button class="btn btn-secondary btn-sm" onclick="copyLogs()">📋 Copy</button>
-        <button class="btn btn-secondary btn-sm" onclick="clearLogs()">🗑️ Clear</button>
-      </div>
-    </div>
-
-    <div class="terminal-body" id="term-body">
-      <div id="term-lines"></div>
-      <div style="margin-top: 6px;"><span class="term-cursor"></span></div>
-    </div>
-  </div>
-</div>
-
-<script>
-let displayedLogs = [];
-let activeLevel = 'all';
-let lastReceivedId = 0;
-let isFetchingLogs = false;
-let totalLinesCount = 0;
 
 function showToast(msg) {
   const t = document.getElementById('toast');
-  t.innerText = msg;
+  t.textContent = msg;
   t.classList.add('show');
-  setTimeout(() => t.classList.remove('show'), 2500);
+  setTimeout(() => { t.classList.remove('show'); }, 2500);
 }
 
-function setLevelFilter(lvl) {
-  activeLevel = lvl;
-  document.querySelectorAll('.level-tag').forEach(b => {
-    b.classList.toggle('active', b.getAttribute('data-lvl') === lvl);
-  });
-  renderAllLogs();
+function escapeHtml(str) {
+  if (!str) return '';
+  return String(str).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
-function formatLogLine(raw) {
-  // Strip ANSI color escape codes (e.g. \u001b[2m)
-  let clean = raw.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '').replace(/\\u001b\[[0-9;]*[a-zA-Z]/g, '');
-  let text = clean.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  
-  // Highlighting
-  text = text.replace(/^(\d{4}-\d{2}-\d{2}T[\d:\.]+Z)/, '<span class="highlight-time">$1</span>');
-  text = text.replace(/\bINFO\b/, '<span class="highlight-info">INFO</span>');
-  text = text.replace(/\bWARN\b/, '<span class="highlight-warn">WARN</span>');
-  text = text.replace(/\bERROR\b/, '<span class="highlight-error">ERROR</span>');
-  text = text.replace(/\bDEBUG\b/, '<span class="highlight-time">DEBUG</span>');
-  text = text.replace(/(Uploading: [^\s]+)/, '<span class="highlight-upload">$1</span>');
-  text = text.replace(/(Downloading: [^\s]+)/, '<span class="highlight-folder">$1</span>');
-  text = text.replace(/(Reconciliation done [^$]+)/, '<span class="highlight-done">$1</span>');
-  text = text.replace(/(Manual sync done [^$]+)/, '<span class="highlight-done">$1</span>');
-  text = text.replace(/(Sync folder: [^$]+)/, '<span class="highlight-folder">$1</span>');
-  return text;
+function escapeRegex(str) {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-function matchesFilter(entry, query) {
-  const text = entry.text || '';
-  if (activeLevel === 'info' && !text.includes('INFO')) return false;
-  if (activeLevel === 'upload' && !text.includes('Uploading:') && !text.includes('Downloading:')) return false;
-  if (activeLevel === 'warn' && !text.includes('WARN')) return false;
-  if (activeLevel === 'error' && !text.includes('ERROR')) return false;
-  if (query && !text.toLowerCase().includes(query)) return false;
-  return true;
-}
-
-function renderAllLogs() {
-  const container = document.getElementById('term-lines');
-  const query = document.getElementById('search-filter').value.toLowerCase().trim();
-  const autoScroll = document.getElementById('auto-scroll').checked;
-
-  const filtered = displayedLogs.filter(e => matchesFilter(e, query));
-  const slice = filtered.slice(Math.max(0, filtered.length - 1000));
-
-  container.innerHTML = slice.map(entry => {
-    return `<div class="term-line"><span class="line-num">${entry.id}</span><span class="line-text">${formatLogLine(entry.text)}</span></div>`;
-  }).join('');
-
-  updateSyncStateBadge();
-
-  if (autoScroll) {
-    const body = document.getElementById('term-body');
-    body.scrollTop = body.scrollHeight;
+// ── Startup Initialization ──────────────────────────────────
+window.addEventListener('DOMContentLoaded', () => {
+  let initialTab = 'status';
+  const hash = window.location.hash.replace('#', '');
+  if (hash === 'config' || hash === 'preferences' || window.location.pathname.includes('/config')) {
+    initialTab = 'config';
   }
-}
-
-function appendNewLogs(newEntries) {
-  const container = document.getElementById('term-lines');
-  const autoScroll = document.getElementById('auto-scroll').checked;
-  const query = document.getElementById('search-filter').value.toLowerCase().trim();
-
-  for (const entry of newEntries) {
-    displayedLogs.push(entry);
-
-    if (matchesFilter(entry, query)) {
-      const row = document.createElement('div');
-      row.className = 'term-line';
-      row.innerHTML = `<span class="line-num">${entry.id}</span><span class="line-text">${formatLogLine(entry.text)}</span>`;
-      container.appendChild(row);
-    }
-  }
-
-  // Keep DOM element count bounded to last 1000 items for buttery smooth performance
-  while (container.childNodes.length > 1000) {
-    container.removeChild(container.firstChild);
-  }
-  if (displayedLogs.length > 2500) {
-    displayedLogs = displayedLogs.slice(displayedLogs.length - 2500);
-  }
-
-  updateSyncStateBadge();
-
-  if (autoScroll) {
-    const body = document.getElementById('term-body');
-    body.scrollTop = body.scrollHeight;
-  }
-}
-
-function updateSyncStateBadge() {
-  let isSyncing = false;
-  for (let i = displayedLogs.length - 1; i >= Math.max(0, displayedLogs.length - 25); i--) {
-    const text = displayedLogs[i].text || '';
-    if (text.includes('Reconciliation done') || text.includes('Manual sync done')) {
-      isSyncing = false;
-      break;
-    }
-    if (text.includes('Starting sync') || text.includes('Uploading:') || text.includes('Downloading:') || text.includes('queueing download')) {
-      isSyncing = true;
-      break;
-    }
-  }
-
-  const badge = document.getElementById('app-badge');
-  const badgeText = document.getElementById('badge-text');
-  if (isSyncing) {
-    badge.className = 'status-badge syncing';
-    badgeText.innerText = 'Syncing…';
-  } else {
-    badge.className = 'status-badge';
-    badgeText.innerText = 'Idle (Watching)';
-  }
-}
-
-async function fetchLogs() {
-  if (isFetchingLogs) return;
-  isFetchingLogs = true;
-  try {
-    const url = lastReceivedId > 0 ? `/api/logs?since=${lastReceivedId}` : '/api/logs';
-    const res = await fetch(url);
-    if (res.ok) {
-      const data = await res.json();
-      if (data.total !== undefined) {
-        totalLinesCount = data.total;
-        document.getElementById('stat-lines').innerText = totalLinesCount.toLocaleString() + ' total lines';
-      }
-
-      const newEntries = data.logs || [];
-      if (newEntries.length > 0) {
-        // Track the highest received id
-        lastReceivedId = Math.max(lastReceivedId, newEntries[newEntries.length - 1].id);
-
-        if (displayedLogs.length === 0) {
-          displayedLogs = newEntries;
-          renderAllLogs();
-        } else {
-          appendNewLogs(newEntries);
-        }
-      }
-    }
-  } catch (err) {
-    console.warn('Fetch logs error:', err);
-  } finally {
-    isFetchingLogs = false;
-  }
-}
-
-async function fetchConfigSummary() {
-  try {
-    const res = await fetch('/api/config');
-    if (res.ok) {
-      const cfg = await res.json();
-      const count = (cfg.sync_folders || []).length;
-      document.getElementById('stat-folders').innerText = count + ' folder' + (count === 1 ? '' : 's');
-      document.getElementById('stat-interval').innerText = (cfg.sync_interval_secs || 300) + 's';
-    }
-  } catch (err) {}
-}
-
-async function syncNow() {
-  try {
-    await fetch('/api/sync-now', { method: 'POST' });
-    showToast('⚡ Sync pass initiated');
-    fetchLogs();
-  } catch (err) {
-    showToast('❌ Sync trigger failed: ' + err);
-  }
-}
-
-async function openLogFile() {
-  try {
-    await fetch('/api/open-log-file', { method: 'POST' });
-    showToast('📄 Opened cloudsync.log');
-  } catch (err) {}
-}
-
-async function clearLogs() {
-  await fetch('/api/logs/clear', { method: 'POST' });
-  displayedLogs = [];
-  lastReceivedId = 0;
-  document.getElementById('term-lines').innerHTML = '';
-  document.getElementById('stat-lines').innerText = '0 lines';
-  showToast('Cleared terminal output');
-}
-
-function copyLogs() {
-  const text = displayedLogs.map(e => `[${e.id}] ${e.text}`).join('\n');
-  navigator.clipboard.writeText(text);
-  showToast('📋 Copied ' + displayedLogs.length + ' lines to clipboard');
-}
-
-window.onload = () => {
-  fetchConfigSummary();
+  switchTab(initialTab);
+  loadConfig();
   fetchLogs();
-  setInterval(fetchLogs, 800);
-};
+  setInterval(fetchLogs, 750);
+});
 </script>
 </body>
-</html>
-"#;
+</html>"##;
 
 #[cfg(test)]
 mod tests {

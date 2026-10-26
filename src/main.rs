@@ -9,24 +9,36 @@ mod watcher;
 
 use anyhow::Result;
 use std::sync::Arc;
+use tao::dpi::LogicalSize;
 use tao::event::{Event, StartCause};
 use tao::event_loop::{ControlFlow, EventLoopBuilder, EventLoopProxy};
-use tao::platform::macos::{ActivationPolicy, EventLoopExtMacOS};
+use tao::platform::macos::{ActivationPolicy, EventLoopExtMacOS, EventLoopWindowTargetExtMacOS};
+use tao::window::{Window, WindowBuilder};
 use tokio::sync::{Mutex, RwLock};
 use tokio::time::{interval, Duration};
 use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
+use wry::WebViewBuilder;
 
 use cloud::onedrive::OneDriveClient;
 use config::{Config, FolderPair};
 use config_server::{
-    get_config_server_url, get_status_server_url, start_config_server, AppLogWriter,
-    ConfigServerEvent,
+    get_config_server_port, start_config_server, AppLogWriter, ConfigServerEvent,
 };
 use state_db::StateDb;
 use sync_engine::{SyncEngine, SyncSummary};
 use tray::{build_tray, update_tray, TrayCommand, TrayState};
 use watcher::{start_watcher, WatchEvent};
+
+/// Events sent to the main (UI) thread.
+/// Combines tray-state updates and webview-open requests.
+#[derive(Debug, Clone)]
+enum MainEvent {
+    /// Update the tray icon / tooltip
+    TrayState(TrayState),
+    /// Open a native webview window for the given tab ("status" or "config")
+    OpenWebview { tab: String },
+}
 
 fn main() -> Result<()> {
     // ── Config & logging ─────────────────────────────────────────────────────
@@ -56,7 +68,7 @@ fn main() -> Result<()> {
         .init();
 
     // ── UI event loop owns the main thread ───────────────────────────────────
-    let mut event_loop = EventLoopBuilder::<TrayState>::with_user_event().build();
+    let mut event_loop = EventLoopBuilder::<MainEvent>::with_user_event().build();
     event_loop.set_activation_policy(ActivationPolicy::Accessory); // menu bar only, no Dock icon
     let proxy = event_loop.create_proxy();
 
@@ -69,7 +81,10 @@ fn main() -> Result<()> {
     let mut config = Some(config);
     let mut tray = None;
 
-    event_loop.run(move |event, _, control_flow| {
+    // Keep a single webview window alive so it can be shown/hidden instantly
+    let mut webview_window: Option<(Window, wry::WebView)> = None;
+
+    event_loop.run(move |event, event_loop_wt, control_flow| {
         *control_flow = ControlFlow::Wait;
 
         match event {
@@ -80,22 +95,141 @@ fn main() -> Result<()> {
                 tray = Some(t);
 
                 let cfg = config.take().expect("config already taken");
+                let (sync_now_tx, sync_now_rx) = tokio::sync::mpsc::channel::<()>(8);
+                let primary_folder = Arc::new(std::sync::RwLock::new(
+                    cfg.get_sync_folders().first().map(|f| f.local_folder.clone()).unwrap_or_default()
+                ));
+
+                // Dedicated thread: executes all UI tray commands IMMEDIATELY (sub-millisecond)
+                // so menu clicks (Status, Preferences, Finder) are NEVER blocked by network/sync operations
+                let proxy_ui = proxy.clone();
+                let primary_folder_ui = Arc::clone(&primary_folder);
+                let sync_now_tx_ui = sync_now_tx.clone();
+                std::thread::spawn(move || {
+                    while let Ok(cmd) = tray_cmd_rx.recv() {
+                        match cmd {
+                            TrayCommand::OpenStatus => {
+                                info!("Opening Status console in native webview");
+                                proxy_ui.send_event(MainEvent::OpenWebview {
+                                    tab: "status".to_string(),
+                                }).ok();
+                            }
+                            TrayCommand::OpenConfig => {
+                                info!("Opening Preferences in native webview");
+                                proxy_ui.send_event(MainEvent::OpenWebview {
+                                    tab: "config".to_string(),
+                                }).ok();
+                            }
+                            TrayCommand::OpenFolder => {
+                                if let Ok(folder) = primary_folder_ui.read() {
+                                    if folder.as_os_str().len() > 0 {
+                                        open::that(&*folder).ok();
+                                    }
+                                }
+                            }
+                            TrayCommand::RevealConfigDir => {
+                                if let Some(parent) = Config::config_path().parent() {
+                                    open::that(parent).ok();
+                                }
+                            }
+                            TrayCommand::Quit => {
+                                info!("Quit requested from tray.");
+                                std::process::exit(0);
+                            }
+                            TrayCommand::SyncNow => {
+                                info!("Manual sync triggered from tray.");
+                                let _ = sync_now_tx_ui.blocking_send(());
+                            }
+                        }
+                    }
+                });
+
                 let proxy = proxy.clone();
+                let primary_folder_sync = Arc::clone(&primary_folder);
 
                 // Everything async runs on a background thread
                 std::thread::spawn(move || {
                     let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
-                    if let Err(e) = rt.block_on(run(cfg, tray_cmd_rx, proxy)) {
+                    if let Err(e) = rt.block_on(run(cfg, sync_now_rx, primary_folder_sync, proxy)) {
                         error!("Fatal error: {e:#}");
                         std::process::exit(1);
                     }
                 });
             }
 
-            // Tray state changes sent from the sync thread
-            Event::UserEvent(state) => {
-                if let Some(t) = &tray {
-                    update_tray(t, &state).ok();
+            // Events sent from the async sync thread
+            Event::UserEvent(main_event) => {
+                match main_event {
+                    MainEvent::TrayState(state) => {
+                        if let Some(t) = &tray {
+                            update_tray(t, &state).ok();
+                        }
+                    }
+                    MainEvent::OpenWebview { tab } => {
+                        let port = get_config_server_port();
+                        let url = format!("http://127.0.0.1:{}/#{}", port, tab);
+
+                        // Temporarily promote to Regular so macOS brings the window to the front
+                        event_loop_wt.set_activation_policy_at_runtime(ActivationPolicy::Regular);
+
+                        if let Some((win, wv)) = webview_window.as_ref() {
+                            win.set_visible(true);
+                            win.set_focus();
+                            #[cfg(target_os = "macos")]
+                            unsafe {
+                                use cocoa::appkit::{NSApplication, NSWindow};
+                                use tao::platform::macos::WindowExtMacOS;
+                                let ns_win = win.ns_window() as cocoa::base::id;
+                                ns_win.makeKeyAndOrderFront_(cocoa::base::nil);
+                                ns_win.orderFrontRegardless();
+                                cocoa::appkit::NSApp().activateIgnoringOtherApps_(cocoa::base::YES);
+                            }
+                            let js = format!("if (typeof switchTab === 'function') switchTab('{}');", tab);
+                            wv.evaluate_script(&js).ok();
+                        } else {
+                            let window = WindowBuilder::new()
+                                .with_title("CloudSync")
+                                .with_inner_size(LogicalSize::new(980.0, 720.0))
+                                .with_min_inner_size(LogicalSize::new(760.0, 500.0))
+                                .build(event_loop_wt)
+                                .expect("failed to create webview window");
+
+                            let webview = WebViewBuilder::new(&window)
+                                .with_url(&url)
+                                .with_devtools(cfg!(debug_assertions))
+                                .build()
+                                .expect("failed to create webview");
+
+                            window.set_visible(true);
+                            window.set_focus();
+                            #[cfg(target_os = "macos")]
+                            unsafe {
+                                use cocoa::appkit::{NSApplication, NSWindow};
+                                use tao::platform::macos::WindowExtMacOS;
+                                let ns_win = window.ns_window() as cocoa::base::id;
+                                ns_win.makeKeyAndOrderFront_(cocoa::base::nil);
+                                ns_win.orderFrontRegardless();
+                                cocoa::appkit::NSApp().activateIgnoringOtherApps_(cocoa::base::YES);
+                            }
+
+                            webview_window = Some((window, webview));
+                        }
+                    }
+                }
+            }
+
+            // Handle webview window close — hide instead of destroying
+            Event::WindowEvent {
+                event: tao::event::WindowEvent::CloseRequested,
+                window_id,
+                ..
+            } => {
+                // Hide the window instead of destroying it for instant re-open
+                if let Some((win, _)) = webview_window.as_ref() {
+                    if win.id() == window_id {
+                        win.set_visible(false);
+                        event_loop_wt.set_activation_policy_at_runtime(ActivationPolicy::Accessory);
+                    }
                 }
             }
 
@@ -106,12 +240,13 @@ fn main() -> Result<()> {
 
 async fn run(
     mut config: Config,
-    tray_cmd_rx: std::sync::mpsc::Receiver<TrayCommand>,
-    proxy: EventLoopProxy<TrayState>,
+    mut sync_now_rx: tokio::sync::mpsc::Receiver<()>,
+    primary_folder_sync: Arc<std::sync::RwLock<std::path::PathBuf>>,
+    proxy: EventLoopProxy<MainEvent>,
 ) -> Result<()> {
-    // Sends a state change to the main thread, which updates the tray icon
+    // Sends a tray-state change to the main thread
     let ui = |s: TrayState| {
-        proxy.send_event(s).ok();
+        proxy.send_event(MainEvent::TrayState(s)).ok();
     };
 
     info!("CloudSync starting…");
@@ -156,14 +291,6 @@ async fn run(
     // ── File watcher ─────────────────────────────────────────────────────────
     let watch_dirs: Vec<_> = active_folders.iter().map(|f| f.local_folder.clone()).collect();
     let mut watch_rx = start_watcher(watch_dirs)?;
-
-    // ── Tray command bridge (std → async) ────────────────────────────────────
-    let (async_tray_tx, mut async_tray_rx) = tokio::sync::mpsc::channel::<TrayCommand>(16);
-    std::thread::spawn(move || {
-        while let Ok(cmd) = tray_cmd_rx.recv() {
-            let _ = async_tray_tx.blocking_send(cmd);
-        }
-    });
 
     // ── Periodic sync timer ──────────────────────────────────────────────────
     let mut sync_interval_secs = config.sync_interval_secs;
@@ -290,6 +417,11 @@ async fn run(
                         let new_folders = new_cfg.get_sync_folders();
                         if new_folders != active_folders {
                             active_folders = new_folders;
+                            if let Some(first) = active_folders.first() {
+                                if let Ok(mut lock) = primary_folder_sync.write() {
+                                    *lock = first.local_folder.clone();
+                                }
+                            }
                             let new_watch_dirs = active_folders.iter().map(|f| f.local_folder.clone()).collect();
                             if let Ok(new_rx) = start_watcher(new_watch_dirs) {
                                 watch_rx = new_rx;
@@ -310,73 +442,19 @@ async fn run(
                 }
             }
 
-            // Tray menu command
-            Some(cmd) = async_tray_rx.recv() => {
-                match cmd {
-                    TrayCommand::SyncNow => {
-                        info!("Manual sync triggered from tray.");
-                        ui(TrayState::Syncing);
-                        refresh_token().await;
-                        match reconcile_all(&active_folders, &provider, &config).await {
-                            Ok(s) => info!(
-                                "Manual sync done — ↑{} ↓{} ✓{} ✗{}",
-                                s.uploaded, s.downloaded, s.skipped, s.errors
-                            ),
-                            Err(e) => error!("Manual sync error: {}", e),
-                        }
-                        ui(TrayState::Idle);
-                    }
-                    TrayCommand::OpenStatus => {
-                        let url = get_status_server_url();
-                        info!("Opening Status console: {}", url);
-                        open::that(&url).ok();
-                    }
-                    TrayCommand::OpenFolder => {
-                        if let Some(first) = active_folders.first() {
-                            open::that(&first.local_folder).ok();
-                        }
-                    }
-                    TrayCommand::OpenConfig => {
-                        let url = get_config_server_url();
-                        info!("Opening settings page: {}", url);
-                        open::that(&url).ok();
-                    }
-                    TrayCommand::OpenConfigFile => {
-                        let path = Config::config_path();
-                        info!("Opening config file: {}", path.display());
-                        open::that(&path).ok();
-                    }
-                    TrayCommand::RevealConfigDir => {
-                        if let Some(parent) = Config::config_path().parent() {
-                            open::that(parent).ok();
-                        }
-                    }
-                    TrayCommand::SetLogLevel(lvl) => {
-                        info!("Setting log level to: {}", lvl);
-                        config.log_level = lvl;
-                        let _ = config.save();
-                        let mut w = config_arc.write().await;
-                        *w = config.clone();
-                    }
-                    TrayCommand::SetParallelDownloads(dl) => {
-                        info!("Setting max parallel downloads to: {}", dl);
-                        config.max_parallel_downloads = dl;
-                        let _ = config.save();
-                        let mut w = config_arc.write().await;
-                        *w = config.clone();
-                    }
-                    TrayCommand::SetParallelUploads(ul) => {
-                        info!("Setting max parallel uploads to: {}", ul);
-                        config.max_parallel_uploads = ul;
-                        let _ = config.save();
-                        let mut w = config_arc.write().await;
-                        *w = config.clone();
-                    }
-                    TrayCommand::Quit => {
-                        info!("Quit requested from tray.");
-                        std::process::exit(0);
-                    }
+            // Manual sync triggered from tray menu
+            Some(_) = sync_now_rx.recv() => {
+                info!("Manual sync triggered from tray.");
+                ui(TrayState::Syncing);
+                refresh_token().await;
+                match reconcile_all(&active_folders, &provider, &config).await {
+                    Ok(s) => info!(
+                        "Manual sync done — ↑{} ↓{} ✓{} ✗{}",
+                        s.uploaded, s.downloaded, s.skipped, s.errors
+                    ),
+                    Err(e) => error!("Manual sync error: {}", e),
                 }
+                ui(TrayState::Idle);
             }
         }
     }

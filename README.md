@@ -16,8 +16,8 @@ CloudSync was designed as a drop-in replacement for the official Microsoft OneDr
   - Automatically excludes OS-level metadata at any folder depth (`.DS_Store`, `Thumbs.db`, `.git`, `.Trash`, AppleDouble `._*` resource forks).
   - Detects macOS OneDrive "online-only" (placeholder / dataless) files via filesystem attributes (`SF_DATALESS` / extended attributes) to prevent uploading empty stubs or corrupting cloud files.
 - 🍎 **Menu Bar Agent (Hidden from Desktop & Dock)** — Packaged as a native macOS application bundle (`CloudSync.app`) with `LSUIElement` enabled. CloudSync operates purely from your menu bar with no persistent terminal window on the desktop and no Dock icon.
-- 💻 **Live Web Terminal Console (`/status`)** — Click **Status** in the menu bar to open a dark macOS-themed terminal console in your browser (`https://localhost:8766/status`) streaming real-time colored logs, level filters (`INFO`, `WARN`, `ERROR`, `DEBUG`), text search, and sync controls.
-- ⚙️ **Web Settings UI (`/config`)** — Embedded local HTTPS web interface (`https://localhost:8766/config`) to view, add, or edit sync folder pairings, set transfer limits, and adjust intervals without manually editing configuration files.
+- 💻 **Live Web Terminal Console (`/status`)** — Click **Status** in the menu bar to instantly open a dark macOS-themed terminal console in a native webview window (WKWebView) streaming real-time colored logs, level filters (`INFO`, `WARN`, `ERROR`, `DEBUG`), text search, and sync controls. Opens in under 1 second — no external browser needed.
+- ⚙️ **Web Settings UI (`/config`)** — Instant native webview window to view, add, or edit sync folder pairings, set transfer limits, and adjust intervals without manually editing configuration files. Powered by WKWebView for zero-latency startup.
 - 🔒 **Security & macOS Keychain** — Initial login via OAuth2 PKCE in your default browser. Refresh tokens are stored securely in macOS Keychain (`keyring`) and renewed silently in the background. Local web services run over TLS with auto-generated certificates.
 
 ---
@@ -180,27 +180,21 @@ Click the cloud icon in the macOS menu bar to access the control menu:
 
 | Menu Item | Action |
 |---|---|
-| **Status** | Opens the live streaming terminal status console in your browser (`https://localhost:8766/status`) |
+| **Status** | Opens the native webview console showing the **Terminal Status** tab |
 | **Sync Now** | Manually triggers an immediate two-way reconciliation pass |
 | **Open Sync Folder** | Opens your primary local sync folder in macOS Finder |
-| **Config** ➔ **Open Settings…** | Opens the web configuration UI (`https://localhost:8766/config`) |
-| **Config** ➔ **Log Level** | Dynamically changes logging verbosity (`Trace`, `Debug`, `Info`, `Warn`, `Error`) |
-| **Config** ➔ **Max Downloads / Uploads** | Adjusts concurrent transfer concurrency on the fly |
-| **Config** ➔ **Open config.toml** | Opens the raw configuration file in your default editor |
+| **Preferences…** | Opens the native webview window focused on the **Preferences** tab |
+| **Reveal Config In Finder** | Opens the `~/Library/Application Support/cloudsync/` directory in Finder |
 | **Quit CloudSync** | Gracefully shuts down the background daemon |
 
-### Web Interface URLs
+### Unified Native Webview Window
 
-Both web interfaces run on local HTTPS (`https://localhost:8766`). Self-signed TLS certificates are generated automatically on startup and saved to your Application Support folder.
-
-* **Live Status & Log Console:** [`https://localhost:8766/status`](https://localhost:8766/status)
-  - Dark terminal view with real-time logs.
-  - Quick filter buttons (`ALL`, `INFO`, `WARN`, `ERROR`, `DEBUG`, `TRACE`).
-  - Search box, auto-scroll lock, copy logs, and trigger manual sync.
-* **Preferences & Folder Settings:** [`https://localhost:8766/config`](https://localhost:8766/config)
-  - Visual folder management: add, edit, or remove sync folder pairings.
-  - Native folder browser dialog integration.
-  - Live adjustment of concurrency, interval, and log level.
+CloudSync uses **wry** (the same native web engine behind Tauri) to render both the Terminal Status and Preferences in a single, high-performance window powered by macOS **WKWebView**:
+- **Segmented Tabs:** Seamlessly toggle between **Terminal Status** (live colored logs, search, level filters, log clear/copy) and **Preferences** (sync folders, concurrency, schedule, autostart) inside the same window.
+- **Sub-second startup** — no waiting for an external browser to cold-launch.
+- **Instant activation & focus** — brought directly to the foreground when clicked from the menu bar.
+- **Zero memory overhead** — shares macOS's built-in WebKit engine.
+- **Hide/Show** — closing the window hides it in memory; re-opening from the tray is instantaneous.
 
 ---
 
@@ -210,7 +204,7 @@ You can have CloudSync start automatically whenever you log into macOS:
 
 ### Method 1: Web Settings UI (Recommended)
 1. Click the CloudSync icon in your menu bar.
-2. Select **Config** ➔ **Open Settings…** (or open `https://localhost:8766/config`).
+2. Select **Preferences…** (or open `https://localhost:8766/config`).
 3. Under **Sync Schedule & Logging**, toggle on **"🚀 Open at Login"**.
 
 ### Method 2: macOS System Settings
@@ -301,7 +295,7 @@ cloudSync/
 | **Browser login shows "Tenant error"** | Ensure you selected **Personal Microsoft accounts only** when creating your Entra ID app registration. |
 | **"No authorization code returned"** | Verify that the redirect URI is exactly `http://localhost:8765/callback` and registered under the **Mobile and desktop applications** platform. |
 | **Online-only OneDrive files skipped** | CloudSync intentionally skips OneDrive placeholder (dataless) files to prevent uploading zero-byte stubs. Right-click the folder in OneDrive or Finder and choose *"Always Keep on This Device"* if you wish to sync them. |
-| **Browser warns about self-signed HTTPS certificate** | The local status and config servers run on `https://localhost:8766` using a locally generated certificate in `~/Library/Application Support/cloudsync/`. In Safari or Chrome, click *"Advanced"* and proceed to `localhost`. |
+| **Browser warns about self-signed HTTPS certificate** | This issue no longer applies — CloudSync now uses native webview windows that connect via plain HTTP to `127.0.0.1`. If you access the web UIs externally via browser, the HTTPS endpoint (`https://localhost:8766`) uses a locally generated certificate. In Safari or Chrome, click *"Advanced"* and proceed to `localhost`. |
 | **Reset authentication / switch accounts** | Open macOS **Keychain Access**, search for `cloudsync`, delete the stored token entry, and restart CloudSync to re-authenticate. |
 
 ---

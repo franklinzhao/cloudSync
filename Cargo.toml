@@ -43,6 +43,7 @@ hex = "0.4"
 # System tray
 tray-icon = "0.14"
 tao = "0.26"
+cocoa = "0.25"
 image = { version = "0.25", default-features = false, features = ["png"] }
 
 # macOS native dialogs / open browser
@@ -90,9 +91,13 @@ rustls-pki-types = "1"
 rustls-pemfile = "2"
 tower = { version = "0.5", features = ["util"] }
 tower-service = "0.3"
+wry = "0.37"
 
 [profile.release]
 opt-level = 3
 lto = true
 codegen-units = 1
 strip = true
+
+[patch.crates-io]
+block = { path = "patches/block" }
