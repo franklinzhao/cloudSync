@@ -277,7 +277,10 @@ impl CloudProvider for OneDriveClient {
 
             if resp.status() == StatusCode::NOT_FOUND {
                 if is_root_request {
-                    info!("Remote folder '{}' does not exist yet", base_prefix);
+                    warn!(
+                        "Remote folder '{}' was not found in OneDrive. No files can be downloaded from this path. Check that the signed-in account is correct and that remote_folder matches an existing OneDrive folder. Local files in this sync folder can still be uploaded.",
+                        base_prefix
+                    );
                     return Ok(all_items);
                 }
                 warn!("A remote folder disappeared during listing, skipping it");

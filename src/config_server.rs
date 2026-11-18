@@ -1434,11 +1434,13 @@ function renderFolders() {
   folders.forEach((f, idx) => {
     const div = document.createElement('div');
     div.className = 'folder-item';
+    const localFolder = getResolvedLocalFolder(f);
+    const folderLabel = f.subfolder || (f.local_folder || '').split('/').filter(Boolean).pop() || '';
     div.innerHTML = `
       <div class="folder-item-header">
         <div style="font-weight: 600; font-size: 13px; display: flex; align-items: center; gap: 6px;">
           <span>📁</span>
-          <input type="text" value="${escapeHtml(f.subfolder || '')}"
+          <input type="text" value="${escapeHtml(folderLabel)}"
             placeholder="Folder Name (e.g. Documents)"
             style="background: transparent; border: 1px solid transparent; color: #fff; font-weight: 600; font-size: 13px; border-radius: 4px; padding: 2px 6px;"
             onfocus="this.style.borderColor='var(--accent)'; this.style.background='var(--input-bg)'"
@@ -1456,8 +1458,8 @@ function renderFolders() {
       <div class="form-group" style="margin-bottom: 6px;">
         <label class="form-label">Local Mac Folder</label>
         <div class="folder-input-group">
-          <input type="text" class="form-input" style="flex: 1;" value="${escapeHtml(f.local_folder || '')}"
-            placeholder="/Users/.../path" onchange="updateFolder(${idx}, 'local_folder', this.value)" />
+          <input type="text" class="form-input" style="flex: 1;" value="${escapeHtml(localFolder)}"
+            placeholder="/Users/.../path" onchange="updateLocalFolder(${idx}, this.value)" />
           <button type="button" class="btn-browse" onclick="browseFolder(${idx})">Choose…</button>
         </div>
       </div>
@@ -1475,6 +1477,35 @@ function updateFolder(idx, field, value) {
   if (currentConfig && currentConfig.sync_folders && currentConfig.sync_folders[idx]) {
     currentConfig.sync_folders[idx][field] = value;
   }
+}
+
+function getResolvedLocalFolder(folder) {
+  if (folder.subfolder !== undefined && folder.subfolder !== null) {
+    const rawParent = currentConfig.local_parent_folder || '';
+    const trimmedParent = rawParent.replace(/\/+$/, '');
+    const parent = trimmedParent || (rawParent.startsWith('/') ? '/' : '');
+    const subfolder = String(folder.subfolder).replace(/^\/+|\/+$/g, '');
+    if (!parent) return folder.subfolder;
+    if (!subfolder) return parent;
+    return parent === '/' ? `/${subfolder}` : `${parent}/${subfolder}`;
+  }
+  return folder.local_folder || '';
+}
+
+function updateLocalFolder(idx, value) {
+  const folder = currentConfig?.sync_folders?.[idx];
+  if (!folder) return;
+
+  const parent = (currentConfig.local_parent_folder || '').replace(/\/+$/, '');
+  const normalizedValue = value.replace(/\/+$/, '');
+  if (parent && (normalizedValue === parent || normalizedValue.startsWith(`${parent}/`))) {
+    folder.subfolder = normalizedValue === parent ? '' : normalizedValue.slice(parent.length + 1);
+    delete folder.local_folder;
+  } else {
+    folder.local_folder = value;
+    delete folder.subfolder;
+  }
+  renderFolders();
 }
 
 function addFolder() {
@@ -1500,8 +1531,7 @@ async function browseFolder(idx) {
     const res = await fetch('/api/browse-folder', { method: 'POST' });
     const data = await res.json();
     if (data.path) {
-      updateFolder(idx, 'local_folder', data.path);
-      renderFolders();
+      updateLocalFolder(idx, data.path);
     }
   } catch (e) {}
 }

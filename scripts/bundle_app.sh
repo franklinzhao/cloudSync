@@ -81,11 +81,6 @@ if [ -x "$LSREGISTER" ]; then
 fi
 
 # Set custom Finder icon via AppKit
-swift -e "
-import Cocoa
-if let img = NSImage(contentsOfFile: \"$DIR/assets/icon_syncing.png\") {
-    _ = NSWorkspace.shared.setIcon(img, forFile: \"$APP_DIR\", options: [])
-}
-" 2>/dev/null || true
+swift -e "import Cocoa; if let img = NSImage(contentsOfFile: \"$DIR/assets/icon_syncing.png\") { _ = NSWorkspace.shared.setIcon(img, forFile: \"$APP_DIR\", options: []) }" </dev/null 2>/dev/null || true
 
 echo "CloudSync.app assembled successfully at $APP_DIR with icon_syncing.png as AppIcon.icns"

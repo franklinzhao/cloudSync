@@ -239,6 +239,11 @@ impl<'a> SyncEngine<'a> {
 
     async fn scan_remote(&self, summary: &mut SyncSummary) -> Result<()> {
         let remote_files = self.provider.list_files().await?;
+        info!(
+            "Found {} remote item(s) for local folder {}",
+            remote_files.len(),
+            self.local_root.display()
+        );
         let remote_paths: std::collections::HashSet<String> = remote_files
             .iter()
             .filter(|r| !r.is_dir)
